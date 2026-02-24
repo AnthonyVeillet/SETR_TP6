@@ -1,9 +1,40 @@
 Question 1 : Avez-vous utilisé un ou des outils d'IA pour ce laboratoire, même seulement en partie (oui/non)?
 
+---Anthony Veillet---
+	Oui
+
+---Benoit Audet---
+	Oui
+
 Répondez aux questions suivantes seulement si vous avez répondu "oui" à la question précédente.
 
 Question 2 : Quels modèles (ex., Claude Opus, Gemini Pro, GPT-Codex, etc.)?
 
+---Anthony Veillet---
+	ChatGPT
+
+---Benoit Audet---
+	Gemini Pro
+    Claude Opus
+
 Question 3 : Pour la réalisation de quelles tâches en particulier? Donnez un exemple de "prompt" utilisé et de résultat.
 
+---Anthony Veillet---
+    Yo voici mon travail a faire.
+
+    1) Analyse l'énoncé du travail, soit Énoncé.pdf. Je suis responsable des points 3, 4 et 5 de la section 6.3. Implémentation et débogage.
+
+    2) Analyse la théorie qui peut m'aider à réaliser ce travail, soit le document Atelier 5.pdf 
+
+    3) Je veux que tu sois mon professeur et que tu favorises mon apprentissage, donc ne me donne pas le code complet. Je veux que tu me guide pour m'aider a comprendre et a faire le code. Mon but est d'apprendre. Ainsi, fait moi un plan de quoi faire, avec des étapes. Je vais ensuite pouvoir te questionner sur chacune des étapes, au fur et a mesure que je fais le travail. De plus, s'il te manque d'informations sur certain aspect, dit moi le que je puisse te les donner
+
+
+
+
+---Benoit Audet---
+
 Question 4 : Avez-vous rencontré des problèmes lors de l'utilisation de l'IA (mauvaise compréhension des commandes fournies, résultats erronés, etc.)? Qu'avez-vous fait pour les régler?
+---Anthony Veillet---
+	Non
+
+---Benoit Audet---
