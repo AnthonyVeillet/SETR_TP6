@@ -323,34 +323,72 @@ void _destroyKernel(Kernel *kern)
 
 /* Filtering */
 
-void lowpassFilter(const unsigned int height, const unsigned int width, const unsigned char *input, unsigned char *output,
-                const unsigned int kernel_size, float sigma, const unsigned int n_channels)
+/* DEBUT Tony V1 */
+/* Cache statique : on ne recree le kernel et les buffers float que si les
+ * parametres changent. Pour le filtreur reel (kernel_size constant, sigma constant,
+ * resolution constante), c'est une seule allocation pour toute la vie du programme.
+ */
+static struct {
+    Kernel kern;
+    float *input_cont;
+    float *output_cont;
+    unsigned int cached_height;
+    unsigned int cached_width;
+    unsigned int cached_n_channels;
+    unsigned int cached_kernel_size;
+    float        cached_sigma;
+    int          valide;
+} g_lpCache = {0};
+
+void lowpassFilter(const unsigned int height, const unsigned int width,
+                   const unsigned char *input, unsigned char *output,
+                   const unsigned int kernel_size, float sigma,
+                   const unsigned int n_channels)
 {
-    float *input_cont = (float*)tempsreel_malloc(height * width * n_channels * sizeof(float));
-    if(input_cont == NULL){
-        fprintf(stderr, "[lowpassFilter] Erreur d'allocation memoire avec tempsreel_malloc pour input_cont (pointeur nul)\n");
-        exit(EXIT_FAILURE);
-    }
-    float *output_cont = (float*)tempsreel_malloc(height * width * n_channels * sizeof(float));
-    if(output_cont == NULL){
-        fprintf(stderr, "[lowpassFilter] Erreur d'allocation memoire avec tempsreel_malloc pour output_cont (pointeur nul)\n");
-        exit(EXIT_FAILURE);
+    int cache_hit = g_lpCache.valide
+                 && g_lpCache.cached_height      == height
+                 && g_lpCache.cached_width       == width
+                 && g_lpCache.cached_n_channels  == n_channels
+                 && g_lpCache.cached_kernel_size == kernel_size
+                 && g_lpCache.cached_sigma       == sigma;
+
+    if (!cache_hit) {
+        /* Liberation eventuelle de l'ancien cache */
+        if (g_lpCache.valide) {
+            _destroyKernel(&g_lpCache.kern);
+            tempsreel_free(g_lpCache.input_cont);
+            tempsreel_free(g_lpCache.output_cont);
+            g_lpCache.valide = 0;
+        }
+
+        g_lpCache.kern        = _createGaussianKernel(kernel_size, kernel_size, sigma);
+        g_lpCache.input_cont  = (float*)tempsreel_malloc(height * width * n_channels * sizeof(float));
+        g_lpCache.output_cont = (float*)tempsreel_malloc(height * width * n_channels * sizeof(float));
+        if (g_lpCache.input_cont == NULL || g_lpCache.output_cont == NULL) {
+            fprintf(stderr, "[lowpassFilter] Erreur d'allocation memoire (cache)\n");
+            exit(EXIT_FAILURE);
+        }
+
+        g_lpCache.cached_height      = height;
+        g_lpCache.cached_width       = width;
+        g_lpCache.cached_n_channels  = n_channels;
+        g_lpCache.cached_kernel_size = kernel_size;
+        g_lpCache.cached_sigma       = sigma;
+        g_lpCache.valide = 1;
     }
 
-    Kernel kern = _createGaussianKernel(kernel_size, kernel_size, sigma);
-
-    _permuteRGB(height, width, input_cont, n_channels, input);
+    _permuteRGB(height, width, g_lpCache.input_cont, n_channels, input);
 
     for (unsigned int i = 0; i < n_channels; ++i) {
-        _convolve(height, width, input_cont+(height*width)*i, kern, output_cont+(height*width)*i);
+        _convolve(height, width,
+                  g_lpCache.input_cont  + (height * width) * i,
+                  g_lpCache.kern,
+                  g_lpCache.output_cont + (height * width) * i);
     }
 
-    _unpermuteRGB(height, width, output_cont, n_channels, output);
-
-    _destroyKernel(&kern);
-    tempsreel_free(input_cont);
-    tempsreel_free(output_cont);
+    _unpermuteRGB(height, width, g_lpCache.output_cont, n_channels, output);
 }
+/* FIN Tony V1 */
 
 void highpassFilter(const unsigned int height, const unsigned int width, const unsigned char *input, unsigned char *output,
                 const unsigned int kernel_size, float sigma, const unsigned int n_channels)

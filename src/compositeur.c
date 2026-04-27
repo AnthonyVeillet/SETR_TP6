@@ -85,6 +85,15 @@ double get_time()
 // Le septième est une structure contenant l'information sur le framebuffer (nommé vinfo dans la fonction main()).
 // Le huitième est la longueur effective d'une ligne du framebuffer (en octets), contenue dans finfo.line_length dans la fonction main().
 // Le neuvième argument est le buffer contenant l'image à afficher, et les trois derniers arguments ses dimensions.
+
+/* DEBUT Tony V1 */
+/* Forward declaration : tony_v1_getImageGlobale est defini plus bas dans
+ * le fichier, mais utilise dans ecrireImage. On le declare ici pour eviter
+ * un warning -Wimplicit-function-declaration.
+ */
+unsigned char* tony_v1_getImageGlobale(int fbLineLength, size_t hauteurFB);
+/* FIN Tony V1 */
+
 /* DEBUT Tony V1 */
 /* Optimisation : on retire de cette fonction le `memcpy` complet vers le framebuffer
  * et le `ioctl FBIOPAN_DISPLAY`. Ces operations sont desormais executees UNE SEULE
@@ -195,7 +204,6 @@ void flushFramebuffer(int total,
      * Mais c'est moche. On prefere une fonction dediee : on declare imageGlobale en
      * variable static partagee entre les deux fonctions via fonction-helper.
      */
-    extern unsigned char* tony_v1_getImageGlobale(int fbLineLength, size_t hauteurFB);
     unsigned char* imageGlobale = tony_v1_getImageGlobale(fbLineLength, hauteurFB);
 
     int currentPage = *currentPagePtr;

@@ -41,7 +41,14 @@ int main(int argc, char* argv[])
 
     const char* fichier_ulv = NULL;
     const char* mem_sortie = NULL;
-    struct SchedParams schedParams = {0};
+
+    /* DEBUT Tony V1 */
+    /* {} au lieu de {0} : value-initialization C++ qui zero-init tous les
+     * membres explicitement et evite -Wmissing-field-initializers
+     * (decodeur.c est compile en C++ a cause de jpgd::).
+     */
+    struct SchedParams schedParams = {};
+    /* FIN Tony V1 */
 
     if (argc >= 2 && strcmp(argv[1], "--debug") == 0) {
         printf("[decodeur] Mode debug\n");
@@ -153,7 +160,11 @@ int main(int argc, char* argv[])
     }
 
     // Init mémoire partagée (writer)
-    struct memPartage zone = {0};
+    
+    /* DEBUT Tony V1 */
+    struct memPartage zone = {};
+    /* FIN Tony V1 */
+    
     if (initMemoirePartageeEcrivain(mem_sortie, &zone, &infos) != 0) {
         fprintf(stderr, "[decodeur] Erreur initMemoirePartageeEcrivain\n");
         munmap(fichier_map, (size_t)taille_fichier);
