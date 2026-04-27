@@ -146,13 +146,22 @@ int attenteLecteurAsync(struct memPartage *zone)
 {
     if (!zone || !zone->header) return -1;
 
-    pthread_mutex_lock(&zone->header->mutex);
+    /* DEBUT Tony V1 */
+    /* trylock : si l'ecrivain a le mutex (memcpy en cours), on n'attend pas
+     * et on retourne 0. Le compositeur peut alors poller la source suivante
+     * sans bloquer.
+     */
+    if (pthread_mutex_trylock(&zone->header->mutex) != 0) {
+        return 0; // mutex pas dispo immediatement
+    }
+
     if (zone->header->etat == ETAT_PRET_AVEC_DONNEES) {
-        return 1; // mutex locké
+        return 1; // mutex locke, donnees pretes
     }
 
     pthread_mutex_unlock(&zone->header->mutex);
     return 0;
+    /* FIN Tony V1 */
 }
 
 // Attente de l'écrivain (bloquant). Quand ça retourne, mutex LOCKÉ.

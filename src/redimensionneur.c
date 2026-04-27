@@ -249,10 +249,15 @@ int main(int argc, char* argv[]){
 
         else if (r == 1)
         {
-            // Evenement de profilage : attente mutex lecture
-            evenementProfilage(&profInfos, ETAT_TRAITEMENT); // Evenement de profilage : traitement
+            /* DEBUT Tony V1 */
+            // BUG corrige : l'attente du lecteur etait absente sur la branche bilinear,
+            // ce qui causait une race condition (lecture pendant que l'ecrivain ecrit).
+            evenementProfilage(&profInfos, ETAT_ATTENTE_MUTEXLECTURE);
+            attenteLecteur(&inZone);
+            evenementProfilage(&profInfos, ETAT_TRAITEMENT);
             memcpy(tempIn, inZone.data, tailleIn);
             signalLecteur(&inZone); // libère vite l'entrée
+            /* FIN Tony V1 */
             // Traitement direct dans tempOut pour éviter de bloquer le mutex pendant toute la durée du traitement
             evenementProfilage(&profInfos, ETAT_TRAITEMENT);
             resizeBilinear(tempIn, hauteurVideoIn, largeurVideoIn, tempOut,

@@ -35,6 +35,8 @@
 
 #include <sys/types.h>
 
+#include <sched.h>
+
 // Allocation mémoire, mmap et mlock
 #include <sys/mman.h>
 
@@ -83,101 +85,145 @@ double get_time()
 // Le septième est une structure contenant l'information sur le framebuffer (nommé vinfo dans la fonction main()).
 // Le huitième est la longueur effective d'une ligne du framebuffer (en octets), contenue dans finfo.line_length dans la fonction main().
 // Le neuvième argument est le buffer contenant l'image à afficher, et les trois derniers arguments ses dimensions.
+/* DEBUT Tony V1 */
+/* Optimisation : on retire de cette fonction le `memcpy` complet vers le framebuffer
+ * et le `ioctl FBIOPAN_DISPLAY`. Ces operations sont desormais executees UNE SEULE
+ * FOIS par cycle d'affichage dans le main, au lieu d'a chaque sous-image.
+ *
+ * `currentPage` est aussi exporte vers le main (transmis par pointeur).
+ *
+ * Comportement visuel inchange.
+ */
 void ecrireImage(const int position, const int total,
-                    int fbfd, unsigned char* fb, size_t largeurFB, size_t hauteurFB, struct fb_var_screeninfo *vinfoPtr, int fbLineLength,
-                    const unsigned char *data, size_t hauteurSource, size_t largeurSource, size_t canauxSource){
-    static int currentPage = 0;
-    static unsigned char* imageGlobale = NULL;
-    if(imageGlobale == NULL)
-        imageGlobale = (unsigned char*)calloc(fbLineLength*hauteurFB, 1);
+                 unsigned char* fb, size_t hauteurFB, int fbLineLength,
+                 int currentPage,
+                 const unsigned char *data, size_t hauteurSource, size_t largeurSource, size_t canauxSource){
+    /* DEBUT Tony V1 */
+    unsigned char* imageGlobale = tony_v1_getImageGlobale(fbLineLength, hauteurFB);
+    /* FIN Tony V1 */
 
-    currentPage = (currentPage+1) % 2;
     unsigned char *currentFramebuffer = fb + currentPage * fbLineLength * hauteurFB;
 
-    if(position >= total){
+    if (position >= total) {
         return;
     }
 
+    /* La conversion gris->BGR n'est plus appelee : le compositeur la fait deja
+     * dans lastFrameBGR[i]. On garde la branche par securite mais elle ne devrait
+     * plus etre empruntee.
+     */
     const unsigned char *dataTraite = data;
     unsigned char* d = NULL;
-    if(canauxSource == 1){
-        d = (unsigned char*)tempsreel_malloc(largeurSource*hauteurSource*3);
+    if (canauxSource == 1) {
+        d = (unsigned char*)tempsreel_malloc(largeurSource * hauteurSource * 3);
         unsigned int pos = 0;
-        for(unsigned int i=0; i < hauteurSource; ++i){
-            for(unsigned int j=0; j < largeurSource; ++j){
-                d[pos++] = data[i*largeurSource + j];
-                d[pos++] = data[i*largeurSource + j];
-                d[pos++] = data[i*largeurSource + j];
+        for (unsigned int i = 0; i < hauteurSource; ++i) {
+            for (unsigned int j = 0; j < largeurSource; ++j) {
+                d[pos++] = data[i * largeurSource + j];
+                d[pos++] = data[i * largeurSource + j];
+                d[pos++] = data[i * largeurSource + j];
             }
         }
         dataTraite = d;
     }
 
-
-    if(total == 1){
-        // Une seule image en plein écran
-        for(unsigned int ligne=0; ligne < hauteurSource; ligne++){
-            memcpy(currentFramebuffer + ligne * fbLineLength, dataTraite + ligne * largeurSource * 3, largeurFB * 3);
+    if (total == 1) {
+        /* Cas mono-image : on ecrit directement dans le framebuffer
+         * (pas de imageGlobale, pas de double-copie).
+         */
+        for (unsigned int ligne = 0; ligne < hauteurSource; ligne++) {
+            memcpy(currentFramebuffer + ligne * fbLineLength,
+                   dataTraite + ligne * largeurSource * 3,
+                   largeurSource * 3);
         }
     }
-    else if(total == 2){
-        // Deux images
-        if(position == 0){
-            // Image du haut
-            for(unsigned int ligne=0; ligne < hauteurSource; ligne++){
-                memcpy(imageGlobale + ligne * fbLineLength, dataTraite + ligne * largeurSource * 3, largeurFB * 3);
+    else if (total == 2) {
+        if (position == 0) {
+            for (unsigned int ligne = 0; ligne < hauteurSource; ligne++) {
+                memcpy(imageGlobale + ligne * fbLineLength,
+                       dataTraite + ligne * largeurSource * 3,
+                       largeurSource * 3);
             }
-        }
-        else{
-            // Image du bas
-            for(unsigned int ligne=hauteurSource; ligne < hauteurSource*2; ligne++){
-                memcpy(imageGlobale + ligne * fbLineLength, dataTraite + (ligne-hauteurSource) * largeurSource * 3, largeurFB * 3);
+        } else {
+            for (unsigned int ligne = hauteurSource; ligne < hauteurSource * 2; ligne++) {
+                memcpy(imageGlobale + ligne * fbLineLength,
+                       dataTraite + (ligne - hauteurSource) * largeurSource * 3,
+                       largeurSource * 3);
             }
         }
     }
-    else if(total == 3 || total == 4){
-        // 3 ou 4 images
+    else if (total == 3 || total == 4) {
         off_t offsetLigne = 0;
         off_t offsetColonne = 0;
         switch (position) {
-            case 0:
-                // En haut, à gauche
-                break;
-            case 1:
-                // En haut, à droite
-                offsetColonne = largeurSource;
-                break;
-            case 2:
-                // En bas, à gauche
-                offsetLigne = hauteurSource;
-                break;
-            case 3:
-                // En bas, à droite
-                offsetLigne = hauteurSource;
-                offsetColonne = largeurSource;
-                break;
+            case 0: break;
+            case 1: offsetColonne = largeurSource; break;
+            case 2: offsetLigne = hauteurSource; break;
+            case 3: offsetLigne = hauteurSource; offsetColonne = largeurSource; break;
         }
-        // On copie les données ligne par ligne
         offsetLigne *= fbLineLength;
         offsetColonne *= 3;
-        for(unsigned int ligne=0; ligne < hauteurSource; ligne++){
-            memcpy(imageGlobale + offsetLigne + offsetColonne, dataTraite + ligne * largeurSource * 3, largeurSource * 3);
+        for (unsigned int ligne = 0; ligne < hauteurSource; ligne++) {
+            memcpy(imageGlobale + offsetLigne + offsetColonne,
+                   dataTraite + ligne * largeurSource * 3,
+                   largeurSource * 3);
             offsetLigne += fbLineLength;
         }
     }
 
-    if(total > 1)
-        memcpy(currentFramebuffer, imageGlobale, fbLineLength*hauteurFB);
-        
-    if(canauxSource == 1)
+    if (canauxSource == 1)
         tempsreel_free(d);
-        
+
+    /* On ne fait PLUS le memcpy global ni le FBIOPAN_DISPLAY ici.
+     * Voir flushFramebuffer() ci-dessous, appele 1x par cycle dans le main.
+     */
+}
+
+/* Copie l'imageGlobale vers le framebuffer courant et fait la page-flip.
+ * A appeler UNE SEULE FOIS par cycle d'affichage, apres avoir dessine
+ * toutes les sous-images necessaires avec ecrireImage().
+ *
+ * Pour total==1, ecrireImage ecrit deja directement dans le fb : on fait
+ * juste la page-flip ici.
+ */
+void flushFramebuffer(int total,
+                      int fbfd, unsigned char* fb, size_t hauteurFB,
+                      struct fb_var_screeninfo *vinfoPtr, int fbLineLength,
+                      int *currentPagePtr) {
+    /* Recuperer le imageGlobale via une 2eme variable static ?
+     * Plus simple : on rappelle ecrireImage avec position>=total pour acceder au static.
+     * Mais c'est moche. On prefere une fonction dediee : on declare imageGlobale en
+     * variable static partagee entre les deux fonctions via fonction-helper.
+     */
+    extern unsigned char* tony_v1_getImageGlobale(int fbLineLength, size_t hauteurFB);
+    unsigned char* imageGlobale = tony_v1_getImageGlobale(fbLineLength, hauteurFB);
+
+    int currentPage = *currentPagePtr;
+    unsigned char *currentFramebuffer = fb + currentPage * fbLineLength * hauteurFB;
+
+    if (total > 1 && imageGlobale != NULL) {
+        memcpy(currentFramebuffer, imageGlobale, fbLineLength * hauteurFB);
+    }
+
     vinfoPtr->yoffset = currentPage * vinfoPtr->yres;
     vinfoPtr->activate = FB_ACTIVATE_VBL;
     if (ioctl(fbfd, FBIOPAN_DISPLAY, vinfoPtr)) {
         printf("Erreur lors du changement de buffer (double buffering inactif)!\n");
     }
+
+    *currentPagePtr = (currentPage + 1) % 2;
 }
+
+/* Helper qui partage imageGlobale entre ecrireImage() et flushFramebuffer().
+ * En C, on utilise un seul static partage en encapsulant dans une fonction.
+ */
+unsigned char* tony_v1_getImageGlobale(int fbLineLength, size_t hauteurFB) {
+    static unsigned char* imageGlobale = NULL;
+    if (imageGlobale == NULL && fbLineLength > 0 && hauteurFB > 0)
+        imageGlobale = (unsigned char*)calloc(fbLineLength * hauteurFB, 1);
+    return imageGlobale;
+}
+/* FIN Tony V1 */
 
 // Fonction pour helper
 static inline int lecture_pret(int r) {
@@ -649,6 +695,10 @@ int main(int argc, char* argv[])
         framesWin[i] = 0;
     }
 
+    /* DEBUT Tony V1 */
+    int currentPage = 0;
+    /* FIN Tony V1 */
+
     while(1) {
         evenementProfilage(&profInfos, ETAT_TRAITEMENT);
         double now = get_time();
@@ -691,21 +741,28 @@ int main(int argc, char* argv[])
         // ------------------------
         // 2) AFFICHAGE avec cap FPS (par entrée)
         // ------------------------
+
+        /* DEBUT Tony V1 */
+        int besoinFlush = 0;  /* mis a 1 si au moins une sous-image dessinee */
+        /* FIN Tony V1 */
+
         for (int i = 0; i < nbrActifs; i++) {
 
             if (!gotFrame[i]) continue;
             if (now < nextDisplay[i]) continue;
 
             // Affiche la dernière trame connue à la position i
+            /* DEBUT Tony V1 */
             ecrireImage(
                 i, nbrActifs,
-                fbfd, fbp,
-                vinfo.xres, vinfo.yres,
-                &vinfo, finfo.line_length,
+                fbp, vinfo.yres, finfo.line_length,
+                currentPage,
                 lastFrameBGR[i],
                 h[i], w[i],
                 3 // toujours BGR
             );
+            besoinFlush = 1;
+            /* FIN Tony V1 */
 
             // Stats, on compte seulement si une *nouvelle* frame est arrivée depuis le dernier affichage
             if (newFrame[i]) {
@@ -722,6 +779,13 @@ int main(int argc, char* argv[])
             // Prochain affichage (anti-drift)
             do { nextDisplay[i] += framePeriod[i]; } while (nextDisplay[i] <= now);
         }
+
+        /* DEBUT Tony V1 */
+        if (besoinFlush) {
+            flushFramebuffer(nbrActifs, fbfd, fbp, vinfo.yres,
+                             &vinfo, finfo.line_length, &currentPage);
+        }
+        /* FIN Tony V1 */
 
         // ------------------------
         // 3) stats.txt toutes 5 sec
@@ -761,19 +825,28 @@ int main(int argc, char* argv[])
         }
 
         now = get_time();
+        /* DEBUT Tony V1 */
         if (nextEvent > now) {
             double sleepSec = nextEvent - now;
-            if (sleepSec > 0.0005) { // >0.5 ms
+            if (sleepSec > 0.001) { // > 1 ms : vrai sleep utile
                 evenementProfilage(&profInfos, ETAT_ENPAUSE);
-                usleep((unsigned int)(sleepSec * 1e6));
+                /* On laisse une marge de securite de 500us pour ne pas trop dormir
+                 * et risquer de rater le prochain deadline.
+                 */
+                usleep((unsigned int)((sleepSec - 0.0005) * 1e6));
             } else {
+                /* < 1 ms : usleep aurait dormi 4-10ms reels (CONFIG_HZ=100/250)
+                 * et plafonne nos FPS. sched_yield() rend la main au scheduler
+                 * sans bloquer plus que necessaire.
+                 */
                 evenementProfilage(&profInfos, ETAT_ENPAUSE);
-                usleep(200); // micro-yield
+                sched_yield();
             }
         } else {
             evenementProfilage(&profInfos, ETAT_ENPAUSE);
-            usleep(500); // fallback yield
+            sched_yield();
         }
+        /* FIN Tony V1 */
     }
 
 
