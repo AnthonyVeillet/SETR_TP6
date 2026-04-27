@@ -32,7 +32,6 @@
 #include <sys/ioctl.h>
 
 #include <sys/time.h>
-#include <sys/resource.h>
 
 #include <sys/types.h>
 
@@ -59,14 +58,16 @@
 #include "allocateurMemoire.h"
 #include "commMemoirePartagee.h"
 #include "utils.h"
+#include <getopt.h>
 
 
 // Fonction permettant de récupérer le temps courant sous forme double
 double get_time()
 {
     struct timeval t;
-    struct timezone tzp;
-    gettimeofday(&t, &tzp);
+    //struct timezone tzp; ERREUR AVEC STRUCT timezone NON DEFINIE, CORRECTION PAR CHATGPT
+    //gettimeofday(&t, &tzp);
+    gettimeofday(&t, NULL);
     return (double)t.tv_sec + (double)(t.tv_usec)*1e-6;
 }
 
@@ -178,14 +179,31 @@ void ecrireImage(const int position, const int total,
     }
 }
 
-
+// Fonction pour helper
+static inline int lecture_pret(int r) {
+    return (r == 1);
+}
 
 int main(int argc, char* argv[])
 {
-    // TODO TODO TODO
-    // ÉCRIVEZ ICI votre code d'analyse des arguments du programme et d'initialisation des zones mémoire partagées
-    int nbrActifs;      // Après votre initialisation, cette variable DOIT contenir le nombre de flux vidéos actifs (de 1 à 4 inclusivement).
+    // FAIT PAR ANTHONY VEILLET
+    // code d'analyse des arguments du programme et d'initialisation des zones mémoire partagées
+    int nbrActifs;      // Après initialisation, cette variable contient le nombre de flux vidéos actifs (de 1 à 4 inclusivement).
     
+
+    char *entree1, *entree2, *entree3, *entree4;
+    struct memPartage zone1 = {0}, zone2 = {0}, zone3 = {0}, zone4 = {0};
+    uint32_t
+        largeurVideo1, hauteurVideo1, canauxVideo1, fpsVideo1,
+        largeurVideo2, hauteurVideo2, canauxVideo2, fpsVideo2,
+        largeurVideo3, hauteurVideo3, canauxVideo3, fpsVideo3,
+        largeurVideo4, hauteurVideo4, canauxVideo4, fpsVideo4;
+
+    largeurVideo1 = hauteurVideo1 = canauxVideo1 = fpsVideo1 = 0;
+    largeurVideo2 = hauteurVideo2 = canauxVideo2 = fpsVideo2 = 0;
+    largeurVideo3 = hauteurVideo3 = canauxVideo3 = fpsVideo3 = 0;
+    largeurVideo4 = hauteurVideo4 = canauxVideo4 = fpsVideo4 = 0;
+
     // On desactive le buffering pour les printf(), pour qu'il soit possible de les voir depuis votre ordinateur
     setbuf(stdout, NULL);
     
@@ -198,6 +216,297 @@ int main(int argc, char* argv[])
     
     // Premier evenement de profilage : l'initialisation du programme
     evenementProfilage(&profInfos, ETAT_INITIALISATION);
+
+    // Code lisant les options sur la ligne de commande
+    struct SchedParams schedParams = {0};           // Paramètres de l'ordonnanceur
+    unsigned int runtime, deadline, period;         // Dans le cas de l'ordonnanceur DEADLINE
+
+    if(argc < 2){
+        printf("Nombre d'arguments insuffisant\n");
+        return -1;
+    }
+
+    if(strcmp(argv[1], "--debug") == 0){
+        // Mode debug, vous pouvez changer ces valeurs pour ce qui convient dans vos tests
+        printf("Mode debug selectionne pour le compositeur\n");
+        entree1 = (char*)"/mem1";
+        entree2 = (char*)"/mem2";
+        entree3 = (char*)"/mem3";
+        entree4 = (char*)"/mem4";
+        runtime = 10;
+        deadline = 20;
+        period = 25;
+        (void)runtime; (void)deadline; (void)period; // Pour retirer les warning qui dise qu'ils ne sont pas utilisés
+
+        nbrActifs = 4;
+        printf("Initialisation compositeur, entree1=%s, entree2=%s, entree3=%s, entree4=%s, "
+            "mode d'ordonnancement=%i\n",
+            entree1, entree2, entree3, entree4, schedParams.modeOrdonnanceur);
+        int r1 = initMemoirePartageeLecteur(entree1, &zone1);
+        int r2 = initMemoirePartageeLecteur(entree2, &zone2);
+        int r3 = initMemoirePartageeLecteur(entree3, &zone3);
+        int r4 = initMemoirePartageeLecteur(entree4, &zone4);
+        if ((r1 != 0) || (r2 != 0) || (r3 != 0) || (r4 != 0))
+            {
+                printf("Erreur d'initialisation memoire partagee lecteur\n");
+                return -1;
+            }
+        
+        largeurVideo1 = zone1.header->infos.largeur;
+        hauteurVideo1 = zone1.header->infos.hauteur;
+        canauxVideo1 = zone1.header->infos.canaux;
+        fpsVideo1 = zone1.header->infos.fps;
+        largeurVideo2 = zone2.header->infos.largeur;
+        hauteurVideo2 = zone2.header->infos.hauteur;
+        canauxVideo2 = zone2.header->infos.canaux;
+        fpsVideo2 = zone2.header->infos.fps;
+        largeurVideo3 = zone3.header->infos.largeur;
+        hauteurVideo3 = zone3.header->infos.hauteur;
+        canauxVideo3 = zone3.header->infos.canaux;
+        fpsVideo3 = zone3.header->infos.fps;
+        largeurVideo4 = zone4.header->infos.largeur;
+        hauteurVideo4 = zone4.header->infos.hauteur;
+        canauxVideo4 = zone4.header->infos.canaux;
+        fpsVideo4 = zone4.header->infos.fps;
+
+        if ((fpsVideo1 == 0) || (fpsVideo2 == 0) || (fpsVideo3 == 0) || (fpsVideo4 == 0))
+        {
+            printf("Le nombre de FPS pour chaque vidéo doit être supérieur à 0\n");
+            return -1;
+        }
+
+        if ((canauxVideo1 != 1 && canauxVideo1 != 3) || (canauxVideo2 != 1 && canauxVideo2 != 3) || (canauxVideo3 != 1 && canauxVideo3 != 3) || (canauxVideo4 != 1 && canauxVideo4 != 3))
+        {
+            printf("Format de video non supporte, seulement les formats gris ou BGR\n");
+            return -1;
+        }
+        if ((largeurVideo1 != 427 || hauteurVideo1 != 240) || (largeurVideo2 != 427 || hauteurVideo2 != 240) || (largeurVideo3 != 427 || hauteurVideo3 != 240) || (largeurVideo4 != 427 || hauteurVideo4 != 240))
+        {
+            printf("Format de video non supporte, seulement les videos en 427x240 sont supportees\n");
+            return -1;
+        }
+
+    }
+    else{
+        int c;
+        opterr = 0;
+
+        while ((c = getopt (argc, argv, "s:d:")) != -1){
+            switch (c) {
+                case 's':
+                    parseSchedOption(optarg, &schedParams);
+                    break;
+                case 'd':
+                    parseDeadlineParams(optarg, &schedParams);
+                    break;
+                default:
+                    continue;
+            }
+        }
+
+        // Ce qui suit est la description des zones memoires d'entree
+        if(argc - optind < 1){
+            printf("Arguments manquants (fichier_entree\n");
+            return -1;
+        }
+
+        else if (argc - optind > 4)
+        {
+            printf("Trop d'arguments pour les fichiers d'entree (max 4)\n");
+            return -1;
+        }
+
+        else if (argc - optind == 1)
+        {
+            nbrActifs = 1;
+            entree1 = argv[optind];
+            printf("Initialisation compositeur, entree1=%s, "
+                "mode d'ordonnancement=%i\n",
+                entree1, schedParams.modeOrdonnanceur);
+            if (initMemoirePartageeLecteur(entree1, &zone1) != 0)
+                {
+                    printf("Erreur d'initialisation memoire partagee lecteur\n");
+                    return -1;
+                }
+            
+            largeurVideo1 = zone1.header->infos.largeur;
+            hauteurVideo1 = zone1.header->infos.hauteur;
+            canauxVideo1 = zone1.header->infos.canaux;
+            fpsVideo1 = zone1.header->infos.fps;
+
+            if (fpsVideo1 == 0)
+            {
+                printf("Le nombre de FPS du vidéo doit être supérieur à 0\n");
+                return -1;
+            }
+
+            if (canauxVideo1 != 1 && canauxVideo1 != 3)
+            {
+                printf("Format de video non supporte, seulement les formats gris ou BGR\n");
+                return -1;
+            }
+            if (largeurVideo1 != 427 || hauteurVideo1 != 240)
+            {
+                printf("Format de video non supporte, seulement les videos en 427x240 sont supportees\n");
+                return -1;
+            }
+        }
+
+        else if (argc - optind == 2)
+        {
+            nbrActifs = 2;
+            entree1 = argv[optind];
+            entree2 = argv[optind+1];
+            printf("Initialisation compositeur, entree1=%s, entree2=%s, "
+                "mode d'ordonnancement=%i\n",
+                entree1, entree2, schedParams.modeOrdonnanceur);
+            int r1 = initMemoirePartageeLecteur(entree1, &zone1);
+            int r2 = initMemoirePartageeLecteur(entree2, &zone2);
+            if ((r1 != 0) || (r2 != 0))
+                {
+                    printf("Erreur d'initialisation memoire partagee lecteur\n");
+                    return -1;
+                }
+            
+            largeurVideo1 = zone1.header->infos.largeur;
+            hauteurVideo1 = zone1.header->infos.hauteur;
+            canauxVideo1 = zone1.header->infos.canaux;
+            fpsVideo1 = zone1.header->infos.fps;
+            largeurVideo2 = zone2.header->infos.largeur;
+            hauteurVideo2 = zone2.header->infos.hauteur;
+            canauxVideo2 = zone2.header->infos.canaux;
+            fpsVideo2 = zone2.header->infos.fps;
+
+            if ((fpsVideo1 == 0) || (fpsVideo2 == 0))
+            {
+                printf("Le nombre de FPS pour chaque vidéo doit être supérieur à 0\n");
+                return -1;
+            }
+            
+            if ((canauxVideo1 != 1 && canauxVideo1 != 3) || (canauxVideo2 != 1 && canauxVideo2 != 3))
+            {
+                printf("Format de video non supporte, seulement les formats gris ou BGR\n");
+                return -1;
+            }
+            if ((largeurVideo1 != 427 || hauteurVideo1 != 240) || (largeurVideo2 != 427 || hauteurVideo2 != 240))
+            {
+                printf("Format de video non supporte, seulement les videos en 427x240 sont supportees\n");
+                return -1;
+            }
+
+        }
+        else if (argc - optind == 3)
+        {
+            nbrActifs = 3;
+            entree1 = argv[optind];
+            entree2 = argv[optind+1];
+            entree3 = argv[optind+2];
+            printf("Initialisation compositeur, entree1=%s, entree2=%s, entree3=%s, "
+                "mode d'ordonnancement=%i\n",
+                entree1, entree2, entree3, schedParams.modeOrdonnanceur);
+            int r1 = initMemoirePartageeLecteur(entree1, &zone1);
+            int r2 = initMemoirePartageeLecteur(entree2, &zone2);
+            int r3 = initMemoirePartageeLecteur(entree3, &zone3);
+            if ((r1 != 0) || (r2 != 0) || (r3 != 0))
+                {
+                    printf("Erreur d'initialisation memoire partagee lecteur\n");
+                    return -1;
+                }
+            
+            largeurVideo1 = zone1.header->infos.largeur;
+            hauteurVideo1 = zone1.header->infos.hauteur;
+            canauxVideo1 = zone1.header->infos.canaux;
+            fpsVideo1 = zone1.header->infos.fps;
+            largeurVideo2 = zone2.header->infos.largeur;
+            hauteurVideo2 = zone2.header->infos.hauteur;
+            canauxVideo2 = zone2.header->infos.canaux;
+            fpsVideo2 = zone2.header->infos.fps;
+            largeurVideo3 = zone3.header->infos.largeur;
+            hauteurVideo3 = zone3.header->infos.hauteur;
+            canauxVideo3 = zone3.header->infos.canaux;
+            fpsVideo3 = zone3.header->infos.fps;
+
+            if ((fpsVideo1 == 0) || (fpsVideo2 == 0) || (fpsVideo3 == 0))
+            {
+                printf("Le nombre de FPS pour chaque vidéo doit être supérieur à 0\n");
+                return -1;
+            }
+
+            if ((canauxVideo1 != 1 && canauxVideo1 != 3) || (canauxVideo2 != 1 && canauxVideo2 != 3) || (canauxVideo3 != 1 && canauxVideo3 != 3))
+            {
+                printf("Format de video non supporte, seulement les formats gris ou BGR\n");
+                return -1;
+            }
+            if ((largeurVideo1 != 427 || hauteurVideo1 != 240) || (largeurVideo2 != 427 || hauteurVideo2 != 240) || (largeurVideo3 != 427 || hauteurVideo3 != 240))
+            {
+                printf("Format de video non supporte, seulement les videos en 427x240 sont supportees\n");
+                return -1;
+            }
+
+        }
+        else
+        {
+            nbrActifs = 4;
+            entree1 = argv[optind];
+            entree2 = argv[optind+1];
+            entree3 = argv[optind+2];
+            entree4 = argv[optind+3];
+            printf("Initialisation compositeur, entree1=%s, entree2=%s, entree3=%s, entree4=%s, "
+                "mode d'ordonnancement=%i\n",
+                entree1, entree2, entree3, entree4, schedParams.modeOrdonnanceur);
+            int r1 = initMemoirePartageeLecteur(entree1, &zone1);
+            int r2 = initMemoirePartageeLecteur(entree2, &zone2);
+            int r3 = initMemoirePartageeLecteur(entree3, &zone3);
+            int r4 = initMemoirePartageeLecteur(entree4, &zone4);
+            if ((r1 != 0) || (r2 != 0) || (r3 != 0) || (r4 != 0))
+                {
+                    printf("Erreur d'initialisation memoire partagee lecteur\n");
+                    return -1;
+                }
+            
+            largeurVideo1 = zone1.header->infos.largeur;
+            hauteurVideo1 = zone1.header->infos.hauteur;
+            canauxVideo1 = zone1.header->infos.canaux;
+            fpsVideo1 = zone1.header->infos.fps;
+            largeurVideo2 = zone2.header->infos.largeur;
+            hauteurVideo2 = zone2.header->infos.hauteur;
+            canauxVideo2 = zone2.header->infos.canaux;
+            fpsVideo2 = zone2.header->infos.fps;
+            largeurVideo3 = zone3.header->infos.largeur;
+            hauteurVideo3 = zone3.header->infos.hauteur;
+            canauxVideo3 = zone3.header->infos.canaux;
+            fpsVideo3 = zone3.header->infos.fps;
+            largeurVideo4 = zone4.header->infos.largeur;
+            hauteurVideo4 = zone4.header->infos.hauteur;
+            canauxVideo4 = zone4.header->infos.canaux;
+            fpsVideo4 = zone4.header->infos.fps;
+
+            if ((fpsVideo1 == 0) || (fpsVideo2 == 0) || (fpsVideo3 == 0) || (fpsVideo4 == 0))
+            {
+                printf("Le nombre de FPS pour chaque vidéo doit être supérieur à 0\n");
+                return -1;
+            }
+
+            if ((canauxVideo1 != 1 && canauxVideo1 != 3) || (canauxVideo2 != 1 && canauxVideo2 != 3) || (canauxVideo3 != 1 && canauxVideo3 != 3) || (canauxVideo4 != 1 && canauxVideo4 != 3))
+            {
+                printf("Format de video non supporte, seulement les formats gris ou BGR\n");
+                return -1;
+            }
+            if ((largeurVideo1 != 427 || hauteurVideo1 != 240) || (largeurVideo2 != 427 || hauteurVideo2 != 240) || (largeurVideo3 != 427 || hauteurVideo3 != 240) || (largeurVideo4 != 427 || hauteurVideo4 != 240))
+            {
+                printf("Format de video non supporte, seulement les videos en 427x240 sont supportees\n");
+                return -1;
+            }
+
+        }
+    }
+
+    // Changement de mode d'ordonnancement
+    if (appliquerOrdonnancement(&schedParams, "compositeur") != 0) {
+        printf("Erreur appliquerOrdonnancement\n");
+        return -1;
+    }
+
 
     // Initialisation des structures nécessaires à l'affichage
     long int screensize = 0;
@@ -262,35 +571,209 @@ int main(int argc, char* argv[])
     }
 
 
-    while(1){
-            // Boucle principale du programme
-            // TODO
-            // Appelez ici ecrireImage() avec les images provenant des différents flux vidéo
-            // Attention à ne pas mélanger les flux, et à ne pas bloquer sur un mutex ou une
-            // condition (ce qui bloquerait l'interface entière). attenteLecteurAsync() pourra
-            // vous être très utile ici!
-            //
-            // Nous vous conseillons d'implémenter une limitation du nombre de FPS (images par
-            // seconde), nombre qui est spécifié pour chaque flux. Il est inutile d'aller plus
-            // vite que le nombre de FPS demandé, et cela consomme plus de ressources, ce qui
-            // peut rendre plus difficile l'exécution des configurations difficiles.
-        
-            // N'oubliez pas que toutes les images fournies à ecrireImage() DOIVENT être en
-            // 427x240 (voir le commentaire en haut du document).
-        
-            // Exemple d'appel à ecrireImage (n'oubliez pas de remplacer les arguments commençant par A_REMPLIR!)
-            ecrireImage(A_REMPLIR_POSITION_ACTUELLE, 
-                        nbrActifs, 
-                        fbfd, 
-                        fbp, 
-                        vinfo.xres, 
-                        vinfo.yres, 
-                        &vinfo, 
-                        finfo.line_length,
-                        A_REMPLIR_DONNEES_DE_LA_TRAME,
-                        A_REMPLIR_HAUTEUR_DE_LA_TRAME,
-                        A_REMPLIR_LARGEUR_DE_LA_TRAME,
-                        A_REMPLIR_NOMBRECANAUX_DANS_LA_TRAME);
+    //=====================================
+    // Définition des éléments avant boucle
+    //=====================================
+
+    FILE *fstats = fopen("stats.txt", "w");
+    if (fstats == NULL)
+    {
+        perror("fopen stats.txt");
+        return -1;
+    }
+    setbuf(fstats, NULL);
+
+    double debutCompositeur = get_time();
+
+    // ------------------------
+    // TABLEAUX (1 à 4 flux)
+    // ------------------------
+    struct memPartage* zones[4] = { &zone1, &zone2, &zone3, &zone4 };
+
+    size_t w[4]  = { largeurVideo1, largeurVideo2, largeurVideo3, largeurVideo4};
+    size_t h[4]  = { hauteurVideo1, hauteurVideo2, hauteurVideo3, hauteurVideo4};
+    size_t ch[4] = { canauxVideo1, canauxVideo2, canauxVideo3, canauxVideo4};
+    size_t fps[4]= { fpsVideo1, fpsVideo2, fpsVideo3, fpsVideo4};
+
+    // Pour éviter le malloc dans ecrireImage quand ch==1 : on stocke toujours une trame BGR (3 canaux)
+    size_t pixels[4] = {0};
+    unsigned char* lastFrameBGR[4] = {NULL};
+    int gotFrame[4] = {0};
+    int newFrame[4] = {0};
+
+    // FPS cap par entrée (période)
+    double fpsCap[4] = {0.0};
+    double framePeriod[4] = {0.0};
+    double nextDisplay[4] = {0.0};
+
+    // Stats fenêtre 5 sec
+    double winStart[4] = {0.0};
+    double lastDisplayed[4] = {0.0};
+    double maxDt[4] = {0.0};
+    int framesWin[4] = {0};
+
+    double nextStatsWrite = debutCompositeur + 5.0;
+
+    size_t maxFrameIn = 427u * 240u * 3u; // le plus gros bloc alloué (BGR)
+    if (prepareMemoire(maxFrameIn, maxFrameIn) != 0) {
+        printf("Erreur prepareMemoire\n");
+        return -1;
+    }
+
+    struct rlimit rl = { .rlim_cur = RLIM_INFINITY, .rlim_max = RLIM_INFINITY };
+    setrlimit(RLIMIT_MEMLOCK, &rl);
+    mlockall(MCL_CURRENT | MCL_FUTURE);
+
+    // init par entrée active
+    for (int i = 0; i < nbrActifs; i++) {
+        pixels[i] = w[i] * h[i];
+
+        // Buffer BGR constant (3 canaux)
+        lastFrameBGR[i] = (unsigned char*)tempsreel_malloc(pixels[i] * 3u);
+        if (!lastFrameBGR[i]) {
+            perror("tempsreel_malloc lastFrameBGR");
+            return -1;
+        }
+
+        gotFrame[i] = 0;
+        newFrame[i] = 0;
+
+        // fallback fps si 0
+        fpsCap[i] = (fps[i] == 0) ? 30.0 : (double)fps[i];
+        framePeriod[i] = 1.0 / fpsCap[i];
+        nextDisplay[i] = debutCompositeur;
+
+        winStart[i] = debutCompositeur;
+        lastDisplayed[i] = -1.0;
+        maxDt[i] = 0.0;
+        framesWin[i] = 0;
+    }
+
+    while(1) {
+        evenementProfilage(&profInfos, ETAT_TRAITEMENT);
+        double now = get_time();
+
+        // ------------------------
+        // 1) POLL NON-BLOQUANT : récupérer des nouvelles frames
+        // ------------------------
+        for (int i = 0; i < nbrActifs; i++) {
+
+            evenementProfilage(&profInfos, ETAT_ATTENTE_MUTEXLECTURE);
+            int r = attenteLecteurAsync(zones[i]);
+            evenementProfilage(&profInfos, ETAT_TRAITEMENT);
+            if (!lecture_pret(r)) {
+                continue; // pas prêt -> next source
+            }
+
+            // Ici, le mutex lecteur est lock. On copie puis on libère.
+            if (ch[i] == 3) {
+                // BGR -> BGR
+                memcpy(lastFrameBGR[i], zones[i]->data, pixels[i] * 3u);
+            } else if (ch[i] == 1) {
+                // GRIS -> BGR (sans malloc dans ecrireImage)
+                const unsigned char* src = zones[i]->data;
+                unsigned char* dst = lastFrameBGR[i];
+                for (size_t p = 0; p < pixels[i]; p++) {
+                    unsigned char g = src[p];
+                    *dst++ = g; *dst++ = g; *dst++ = g;
+                }
+            } else {
+                signalLecteur(zones[i]);
+                continue;
+            }
+
+            signalLecteur(zones[i]);
+
+            gotFrame[i] = 1;
+            newFrame[i] = 1;
+        }
+
+        // ------------------------
+        // 2) AFFICHAGE avec cap FPS (par entrée)
+        // ------------------------
+        for (int i = 0; i < nbrActifs; i++) {
+
+            if (!gotFrame[i]) continue;
+            if (now < nextDisplay[i]) continue;
+
+            // Affiche la dernière trame connue à la position i
+            ecrireImage(
+                i, nbrActifs,
+                fbfd, fbp,
+                vinfo.xres, vinfo.yres,
+                &vinfo, finfo.line_length,
+                lastFrameBGR[i],
+                h[i], w[i],
+                3 // toujours BGR
+            );
+
+            // Stats, on compte seulement si une *nouvelle* frame est arrivée depuis le dernier affichage
+            if (newFrame[i]) {
+                framesWin[i]++;
+
+                if (lastDisplayed[i] > 0.0) {
+                    double dt = now - lastDisplayed[i];
+                    if (dt > maxDt[i]) maxDt[i] = dt;
+                }
+                lastDisplayed[i] = now;
+                newFrame[i] = 0;
+            }
+
+            // Prochain affichage (anti-drift)
+            do { nextDisplay[i] += framePeriod[i]; } while (nextDisplay[i] <= now);
+        }
+
+        // ------------------------
+        // 3) stats.txt toutes 5 sec
+        // ------------------------
+        if (now >= nextStatsWrite) {
+            double elapsed = now - debutCompositeur;
+
+            // Formatage
+            fprintf(fstats, "[%.1f] ", elapsed);
+
+            for (int i = 0; i < nbrActifs; i++) {
+                double winDur = now - winStart[i];
+                double moy = (winDur > 0.0) ? ((double)framesWin[i] / winDur) : 0.0;
+
+                fprintf(fstats, "Entree %d: moy=%.1f fps, max=%.1f ms",
+                        i + 1, moy, maxDt[i] * 1000.0);
+
+                if (i != nbrActifs - 1) fprintf(fstats, " | ");
+
+                // reset fenêtre 5 sec
+                winStart[i] = now;
+                framesWin[i] = 0;
+                maxDt[i] = 0.0;
+            }
+
+            fprintf(fstats, "\n");
+            nextStatsWrite += 5.0;
+        }
+
+        // ------------------------
+        // 4) éviter CPU 100% (sleep jusqu'au prochain event)
+        // ------------------------
+        double nextEvent = nextStatsWrite;
+
+        for (int i = 0; i < nbrActifs; i++) {
+            if (nextDisplay[i] < nextEvent) nextEvent = nextDisplay[i];
+        }
+
+        now = get_time();
+        if (nextEvent > now) {
+            double sleepSec = nextEvent - now;
+            if (sleepSec > 0.0005) { // >0.5 ms
+                evenementProfilage(&profInfos, ETAT_ENPAUSE);
+                usleep((unsigned int)(sleepSec * 1e6));
+            } else {
+                evenementProfilage(&profInfos, ETAT_ENPAUSE);
+                usleep(200); // micro-yield
+            }
+        } else {
+            evenementProfilage(&profInfos, ETAT_ENPAUSE);
+            usleep(500); // fallback yield
+        }
     }
 
 
@@ -305,6 +788,7 @@ int main(int argc, char* argv[])
     }
     // Fermer le framebuffer
     close(fbfd);
+    fclose(fstats);
 
     return 0;
 
