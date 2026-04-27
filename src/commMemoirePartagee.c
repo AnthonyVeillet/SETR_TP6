@@ -1,3 +1,12 @@
+/* DEBUT Tony V1 */
+/* _GNU_SOURCE doit etre defini AVANT le premier #include pour exposer
+ * PTHREAD_PRIO_INHERIT (utilise plus bas) et eviter une dependance implicite
+ * sur les flags du build system.
+ */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+/* FIN Tony V1 */
 #include "commMemoirePartagee.h"
 #include <sys/mman.h>
 #include <sys/stat.h>

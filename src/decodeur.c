@@ -1,3 +1,11 @@
+/* DEBUT Tony V1 */
+/* _GNU_SOURCE expose MADV_SEQUENTIAL (extension Linux) et MAP_POPULATE
+ * sans dependre des flags CMake.
+ */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+/* FIN Tony V1 */
 #include <sys/mman.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -164,7 +172,7 @@ int main(int argc, char* argv[])
     /* DEBUT Tony V1 */
     struct memPartage zone = {};
     /* FIN Tony V1 */
-    
+
     if (initMemoirePartageeEcrivain(mem_sortie, &zone, &infos) != 0) {
         fprintf(stderr, "[decodeur] Erreur initMemoirePartageeEcrivain\n");
         munmap(fichier_map, (size_t)taille_fichier);
