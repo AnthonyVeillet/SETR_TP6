@@ -4,37 +4,50 @@
 * Hiver 2026
 * Marc-André Gardner
 *
-* Programme compositeur (version simplifiee TP6 - mono-flux)
+* Programme compositeur (version TP6 V3 - mono-flux optimisee)
 *
 * Recupere UN flux video a partir d'un espace memoire partage et l'affiche
 * directement dans le framebuffer de la carte graphique.
-*
-* IMPORTANT : CE CODE ASSUME QUE LE FLUX RECU EST EN 427x240 (1 ou 3 canaux,
-* BGR si 3 canaux). TOUTE AUTRE TAILLE ENTRAINERA UN COMPORTEMENT INDEFINI.
-*
-* Le code permettant l'affichage est inspire de celui presente sur le blog
-* Raspberry Compote, par J-P Rosti, publie sous la licence CC-BY 3.0.
-* Merci a Yannick Hold-Geoffroy pour l'aide apportee pour la gestion
-* du framebuffer.
 ******************************************************************************/
 
-/* DEBUT Tony TP6 V2 */
-/* Version mono-flux pour le TP6.
- * Retraits par rapport a la version multi-flux (TP3) :
- *   - logique pour 2, 3 et 4 entrees (parsing, init memoire, switch resolution)
- *   - tableaux [4] (zones, w, h, ch, fps, lastFrameBGR, etc.) -> scalaires
- *   - nbrActifs (toujours = 1)
- *   - imageGlobale et tony_v1_getImageGlobale (plus utiles : on ecrit
- *     directement dans le framebuffer car 1 seul flux)
- *   - branches total==2/3/4 dans ecrireImage (gardee uniquement total==1)
+/* DEBUT Tony TP6 V3 */
+/* Optimisations vs V2 (mono-flux non-optimisee) :
  *
- * Conserves a l'identique : synchronisation mutex (attenteLecteurAsync +
- * signalLecteur), conversion gris->BGR locale, double-buffering page-flip
- * via FBIOPAN_DISPLAY, FPS cap anti-drift, format de stats.txt
- * ("[X.X] Entree 1: moy=Y.Y fps, max=Z.Z ms"), strategie d'attente
- * (usleep/sched_yield), ordonnancement.
+ * (1) PRINCIPALE - Synchronisation bloquante :
+ *     attenteLecteurAsync (polling avec sleep+yield) -> attenteLecteur
+ *     Le compositeur dort sur la condvar entre frames (CPU = 0 %), reveille
+ *     uniquement quand le decodeur signale. Gain enorme en consommation,
+ *     objectif principal du TP6.
+ *
+ * (2) Suppression du FPS cap interne :
+ *     fpsCap, framePeriod, nextDisplay, anti-drift loop -> retires.
+ *     Le decodeur dicte le rythme via la condvar (producer/consumer).
+ *
+ * (3) Suppression de la stratégie sleep/sched_yield :
+ *     plus de calcul de nextEvent ni de usleep/sched_yield, on dort
+ *     directement sur pthread_cond_wait dans attenteLecteur.
+ *
+ * (4) Suppression de gotFrame/newFrame/besoinFlush :
+ *     devenus inutiles - apres attenteLecteur, on a TOUJOURS une nouvelle
+ *     frame a afficher.
+ *
+ * (5) ecrireImage optimisee :
+ *     memcpy unique si fbLineLength == largeurSource*3 (pas de padding).
+ *     Sinon ligne par ligne comme avant. Pre-calcul de bytesPerLine.
+ *
+ * (6) Retrait du profilage TP3 :
+ *     evenementProfilage, initProfilage, InfosProfilage retires du
+ *     compositeur. PROFILAGE_ACTIF=0 dans utils.h les rendait deja no-op,
+ *     retrait pour clarte du code TP6.
+ *
+ * (7) Includes inutilises retires : sys/types.h, sys/stat.h, linux/kd.h,
+ *     err.h, errno.h.
+ *
+ * Conserves a l'identique : lecture mutex puis copie locale + signal
+ * (libere le decodeur rapidement), conversion gris->BGR, double-buffering
+ * page-flip via FBIOPAN_DISPLAY, format stats.txt, ordonnancement.
  */
-/* FIN Tony TP6 V2 */
+/* FIN Tony TP6 V3 */
 
 #include <unistd.h>
 #include <stdio.h>
@@ -45,7 +58,6 @@
 
 #include <sys/ioctl.h>
 #include <sys/time.h>
-#include <sys/types.h>
 
 #include <sched.h>
 
@@ -58,16 +70,8 @@
 // Mesure du temps
 #include <time.h>
 
-// Obtenir la taille des fichiers
-#include <sys/stat.h>
-
-// Controle de la console
+// Controle de la console (framebuffer)
 #include <linux/fb.h>
-#include <linux/kd.h>
-
-// Gestion des erreurs
-#include <err.h>
-#include <errno.h>
 
 #include "allocateurMemoire.h"
 #include "commMemoirePartagee.h"
@@ -84,14 +88,10 @@ double get_time()
 }
 
 
-/* DEBUT Tony TP6 V2 */
-/* ecrireImage simplifiee pour le cas mono-flux : on copie directement dans
- * le framebuffer ligne par ligne, sans imageGlobale ni offsets.
- *
- * Hypotheses simplificatrices :
- *   - 1 seule image a afficher par cycle (plus de position/total)
- *   - donnees deja en BGR 3 canaux (la conversion gris->BGR est faite en
- *     amont dans la boucle principale)
+/* DEBUT Tony TP6 V3 */
+/* ecrireImage : copie BGR -> framebuffer.
+ * Optimisation : si fbLineLength == largeurSource*3 (pas de padding entre
+ * lignes du framebuffer), un seul memcpy au lieu de hauteurSource petits.
  */
 static void ecrireImage(unsigned char* fb, size_t hauteurFB, int fbLineLength,
                         int currentPage,
@@ -99,17 +99,20 @@ static void ecrireImage(unsigned char* fb, size_t hauteurFB, int fbLineLength,
                         size_t hauteurSource, size_t largeurSource)
 {
     unsigned char *currentFramebuffer = fb + currentPage * fbLineLength * hauteurFB;
+    const size_t bytesPerLine = largeurSource * 3;
 
-    for (unsigned int ligne = 0; ligne < hauteurSource; ligne++) {
-        memcpy(currentFramebuffer + ligne * fbLineLength,
-               dataBGR + ligne * largeurSource * 3,
-               largeurSource * 3);
+    if ((size_t)fbLineLength == bytesPerLine) {
+        memcpy(currentFramebuffer, dataBGR, bytesPerLine * hauteurSource);
+    } else {
+        for (unsigned int ligne = 0; ligne < hauteurSource; ligne++) {
+            memcpy(currentFramebuffer + ligne * fbLineLength,
+                   dataBGR + ligne * bytesPerLine,
+                   bytesPerLine);
+        }
     }
 }
 
-/* Effectue la page-flip apres avoir dessine la frame courante.
- * En mono-flux, plus besoin de copier un imageGlobale ; on fait juste l'ioctl.
- */
+/* Page-flip apres avoir dessine la frame courante. */
 static void flushFramebuffer(int fbfd, struct fb_var_screeninfo *vinfoPtr,
                              int *currentPagePtr)
 {
@@ -121,52 +124,28 @@ static void flushFramebuffer(int fbfd, struct fb_var_screeninfo *vinfoPtr,
     }
     *currentPagePtr = (currentPage + 1) % 2;
 }
-/* FIN Tony TP6 V2 */
+/* FIN Tony TP6 V3 */
 
-// Fonction helper
-static inline int lecture_pret(int r) {
-    return (r == 1);
-}
 
 int main(int argc, char* argv[])
 {
-    /* DEBUT Tony TP6 V2 */
-    /* Mono-flux : une seule entree, une seule zone memoire partagee. */
     char *entree = NULL;
     struct memPartage zone = {0};
     uint32_t largeurVideo = 0, hauteurVideo = 0, canauxVideo = 0, fpsVideo = 0;
-    /* FIN Tony TP6 V2 */
 
-    // On desactive le buffering pour les printf()
     setbuf(stdout, NULL);
-
-    // Initialise le profilage (no-op si PROFILAGE_ACTIF=0 dans utils.h)
-    char signatureProfilage[128] = {0};
-    char* nomProgramme = (argv[0][0] == '.') ? argv[0]+2 : argv[0];
-    snprintf(signatureProfilage, 128, "profilage-%s-%u.txt", nomProgramme, (unsigned int)getpid());
-    InfosProfilage profInfos;
-    initProfilage(&profInfos, signatureProfilage);
-
-    evenementProfilage(&profInfos, ETAT_INITIALISATION);
 
     // Code lisant les options sur la ligne de commande
     struct SchedParams schedParams = {0};
-    unsigned int runtime, deadline, period;
 
-    if(argc < 2){
+    if (argc < 2) {
         printf("Nombre d'arguments insuffisant\n");
         return -1;
     }
 
-    /* DEBUT Tony TP6 V2 */
-    /* Parsing simplifie : un seul fichier d'entree attendu. */
-    if(strcmp(argv[1], "--debug") == 0){
+    if (strcmp(argv[1], "--debug") == 0) {
         printf("Mode debug selectionne pour le compositeur\n");
         entree = (char*)"/mem1";
-        runtime = 10;
-        deadline = 20;
-        period = 25;
-        (void)runtime; (void)deadline; (void)period;
 
         printf("Initialisation compositeur, entree=%s, mode d'ordonnancement=%i\n",
                entree, schedParams.modeOrdonnanceur);
@@ -180,7 +159,7 @@ int main(int argc, char* argv[])
         int c;
         opterr = 0;
 
-        while ((c = getopt(argc, argv, "s:d:")) != -1){
+        while ((c = getopt(argc, argv, "s:d:")) != -1) {
             switch (c) {
                 case 's': parseSchedOption(optarg, &schedParams); break;
                 case 'd': parseDeadlineParams(optarg, &schedParams); break;
@@ -220,7 +199,7 @@ int main(int argc, char* argv[])
         printf("Format de video non supporte, seulement les videos en 427x240 sont supportees\n");
         return -1;
     }
-    /* FIN Tony TP6 V2 */
+    (void)fpsVideo; // utilisee uniquement pour validation, plus pour le timing
 
     // Changement de mode d'ordonnancement
     if (appliquerOrdonnancement(&schedParams, "compositeur") != 0) {
@@ -245,12 +224,10 @@ int main(int argc, char* argv[])
 
     memcpy(&orig_vinfo, &vinfo, sizeof(struct fb_var_screeninfo));
 
-    /* DEBUT Tony TP6 V2 */
-    /* Resolution figee a 427x240 (1 seul flux) - plus de switch sur nbrActifs. */
+    /* Resolution figee a 427x240 (1 seul flux). */
     vinfo.bits_per_pixel = 24;
     vinfo.xres = 427;
     vinfo.yres = 240;
-    /* FIN Tony TP6 V2 */
 
     vinfo.xres_virtual = vinfo.xres;
     vinfo.yres_virtual = vinfo.yres * 2;
@@ -283,8 +260,6 @@ int main(int argc, char* argv[])
 
     double debutCompositeur = get_time();
 
-    /* DEBUT Tony TP6 V2 */
-    /* Etat mono-flux : tous les tableaux [4] sont remplaces par des scalaires. */
     size_t pixels = (size_t)largeurVideo * (size_t)hauteurVideo;
 
     size_t maxFrameIn = 427u * 240u * 3u;
@@ -297,99 +272,75 @@ int main(int argc, char* argv[])
     setrlimit(RLIMIT_MEMLOCK, &rl);
     mlockall(MCL_CURRENT | MCL_FUTURE);
 
-    // Buffer BGR constant (3 canaux) - copie locale pour ne pas garder le mutex
-    // pendant l'affichage
+    // Buffer BGR local : on copie la zone partagee dedans pour relacher le
+    // mutex le plus vite possible et laisser le decodeur produire la frame
+    // suivante en parallele de l'affichage.
     unsigned char* lastFrameBGR = (unsigned char*)tempsreel_malloc(pixels * 3u);
     if (!lastFrameBGR) {
         perror("tempsreel_malloc lastFrameBGR");
         return -1;
     }
 
-    int gotFrame = 0;
-    int newFrame = 0;
-
-    // FPS cap (periode)
-    double fpsCap = (double)fpsVideo;
-    double framePeriod = 1.0 / fpsCap;
-    double nextDisplay = debutCompositeur;
-
-    // Stats fenetre 5 sec
+    /* DEBUT Tony TP6 V3 */
+    // Etat des stats : reduit aux variables strictement necessaires.
+    // Plus de fpsCap/framePeriod/nextDisplay : la cadence est dictee par
+    // la condvar (decodeur = producteur).
     double winStart = debutCompositeur;
     double lastDisplayed = -1.0;
     double maxDt = 0.0;
     int framesWin = 0;
-
     double nextStatsWrite = debutCompositeur + 5.0;
 
     int currentPage = 0;
-    /* FIN Tony TP6 V2 */
+    /* FIN Tony TP6 V3 */
 
     while(1) {
-        evenementProfilage(&profInfos, ETAT_TRAITEMENT);
+        /* DEBUT Tony TP6 V3 */
+        // ------------------------
+        // 1) ATTENTE BLOQUANTE : se reveille uniquement quand le decodeur
+        //    signale qu'une frame est prete. CPU dort entre frames.
+        //    Au retour, le mutex est LOCKE.
+        // ------------------------
+        attenteLecteur(&zone);
+
         double now = get_time();
 
-        /* DEBUT Tony TP6 V2 */
-        // ------------------------
-        // 1) POLL NON-BLOQUANT : recuperer la nouvelle frame (1 seule source)
-        // ------------------------
-        evenementProfilage(&profInfos, ETAT_ATTENTE_MUTEXLECTURE);
-        int r = attenteLecteurAsync(&zone);
-        evenementProfilage(&profInfos, ETAT_TRAITEMENT);
-
-        if (lecture_pret(r)) {
-            // Mutex lecteur lock. On copie puis on libere.
-            if (canauxVideo == 3) {
-                // BGR -> BGR
-                memcpy(lastFrameBGR, zone.data, pixels * 3u);
-            } else {
-                // GRIS -> BGR (canauxVideo == 1, deja valide en init)
-                const unsigned char* src = zone.data;
-                unsigned char* dst = lastFrameBGR;
-                for (size_t p = 0; p < pixels; p++) {
-                    unsigned char g = src[p];
-                    *dst++ = g; *dst++ = g; *dst++ = g;
-                }
+        // Copie locale puis signal pour liberer le decodeur au plus vite.
+        if (canauxVideo == 3) {
+            memcpy(lastFrameBGR, zone.data, pixels * 3u);
+        } else {
+            // GRIS -> BGR (canauxVideo == 1, deja valide en init)
+            const unsigned char* src = zone.data;
+            unsigned char* dst = lastFrameBGR;
+            for (size_t p = 0; p < pixels; p++) {
+                unsigned char g = src[p];
+                *dst++ = g; *dst++ = g; *dst++ = g;
             }
-            signalLecteur(&zone);
-
-            gotFrame = 1;
-            newFrame = 1;
         }
+        signalLecteur(&zone);
 
         // ------------------------
-        // 2) AFFICHAGE avec cap FPS
+        // 2) AFFICHAGE
         // ------------------------
-        int besoinFlush = 0;
+        ecrireImage(fbp, vinfo.yres, finfo.line_length,
+                    currentPage,
+                    lastFrameBGR,
+                    hauteurVideo, largeurVideo);
 
-        if (gotFrame && now >= nextDisplay) {
-            ecrireImage(fbp, vinfo.yres, finfo.line_length,
-                        currentPage,
-                        lastFrameBGR,
-                        hauteurVideo, largeurVideo);
-            besoinFlush = 1;
-
-            // Stats : compter seulement si nouvelle frame depuis le dernier affichage
-            if (newFrame) {
-                framesWin++;
-
-                if (lastDisplayed > 0.0) {
-                    double dt = now - lastDisplayed;
-                    if (dt > maxDt) maxDt = dt;
-                }
-                lastDisplayed = now;
-                newFrame = 0;
-            }
-
-            // Prochain affichage (anti-drift)
-            do { nextDisplay += framePeriod; } while (nextDisplay <= now);
-        }
-
-        if (besoinFlush) {
-            flushFramebuffer(fbfd, &vinfo, &currentPage);
-        }
+        flushFramebuffer(fbfd, &vinfo, &currentPage);
 
         // ------------------------
-        // 3) stats.txt toutes 5 sec
+        // 3) STATS - chaque frame compte (plus de gating sur newFrame)
+        // ------------------------
+        framesWin++;
+        if (lastDisplayed > 0.0) {
+            double dt = now - lastDisplayed;
+            if (dt > maxDt) maxDt = dt;
+        }
+        lastDisplayed = now;
+
+        // ------------------------
+        // 4) stats.txt toutes 5 sec
         //    Format inchange : "[X.X] Entree 1: moy=Y.Y fps, max=Z.Z ms"
         // ------------------------
         if (now >= nextStatsWrite) {
@@ -400,34 +351,12 @@ int main(int argc, char* argv[])
             fprintf(fstats, "[%.1f] Entree 1: moy=%.1f fps, max=%.1f ms\n",
                     elapsed, moy, maxDt * 1000.0);
 
-            // reset fenetre 5 sec
             winStart = now;
             framesWin = 0;
             maxDt = 0.0;
             nextStatsWrite += 5.0;
         }
-
-        // ------------------------
-        // 4) eviter CPU 100% (sleep jusqu'au prochain event)
-        // ------------------------
-        double nextEvent = nextStatsWrite;
-        if (nextDisplay < nextEvent) nextEvent = nextDisplay;
-
-        now = get_time();
-        if (nextEvent > now) {
-            double sleepSec = nextEvent - now;
-            if (sleepSec > 0.001) {
-                evenementProfilage(&profInfos, ETAT_ENPAUSE);
-                usleep((unsigned int)((sleepSec - 0.0005) * 1e6));
-            } else {
-                evenementProfilage(&profInfos, ETAT_ENPAUSE);
-                sched_yield();
-            }
-        } else {
-            evenementProfilage(&profInfos, ETAT_ENPAUSE);
-            sched_yield();
-        }
-        /* FIN Tony TP6 V2 */
+        /* FIN Tony TP6 V3 */
     }
 
     // cleanup (jamais atteint avec while(1), garde par securite)
