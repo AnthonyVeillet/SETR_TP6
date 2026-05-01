@@ -142,11 +142,20 @@ int attenteLecteur(struct memPartage *zone)
 }
 
 // Attente du lecteur Async (non-bloquant). Si prêt, mutex LOCKÉ.
+/* DEBUT Tony V1 */
 int attenteLecteurAsync(struct memPartage *zone)
 {
     if (!zone || !zone->header) return -1;
 
-    pthread_mutex_lock(&zone->header->mutex);
+    int lockResult = pthread_mutex_trylock(&zone->header->mutex);
+    if (lockResult == EBUSY) {
+        return 0;
+    }
+    if (lockResult != 0) {
+        errno = lockResult;
+        return -1;
+    }
+
     if (zone->header->etat == ETAT_PRET_AVEC_DONNEES) {
         return 1; // mutex locké
     }
@@ -154,6 +163,7 @@ int attenteLecteurAsync(struct memPartage *zone)
     pthread_mutex_unlock(&zone->header->mutex);
     return 0;
 }
+/* FIN Tony V1 */
 
 // Attente de l'écrivain (bloquant). Quand ça retourne, mutex LOCKÉ.
 int attenteEcrivain(struct memPartage *zone)

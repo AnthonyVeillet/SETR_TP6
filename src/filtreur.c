@@ -165,7 +165,9 @@ int main(int argc, char* argv[]){
     // la mémoire partagée).
     unsigned char* tempIn = tempsreel_malloc(tailleImg);
     unsigned char* tempOut = tempsreel_malloc(tailleImg);
-    if (tempOut == NULL)
+    /* DEBUT Tony V1 */
+    if ((tempOut == NULL) || (tempIn == NULL))
+    /* FIN Tony V1 */
     {
         printf("Erreur d'allocation memoire pour les buffers temporaires\n");
         return -1;

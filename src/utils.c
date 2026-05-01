@@ -11,66 +11,133 @@
 #define _GNU_SOURCE
 #include "utils.h"
 
+/* DEBUT Tony V1 */
+#include <limits.h>
+#include <sys/syscall.h>
+#include <linux/sched/types.h>
+
+#ifndef SCHED_DEADLINE
+#define SCHED_DEADLINE 6
+#endif
+
+static int sched_setattr_wrapper(pid_t pid, const struct sched_attr *attr, unsigned int flags)
+{
+#ifdef SYS_sched_setattr
+    return (int)syscall(SYS_sched_setattr, pid, attr, flags);
+#else
+    (void)pid;
+    (void)attr;
+    (void)flags;
+    errno = ENOSYS;
+    return -1;
+#endif
+}
+
+static int ms_to_ns_checked(unsigned int ms, uint64_t *ns)
+{
+    if (!ns || ms == 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    *ns = (uint64_t)ms * 1000000ULL;
+    return 0;
+}
+/* FIN Tony V1 */
+
 #define min(a, b) (((a) < (b)) ? (a) : (b))
 #define max(a, b) (((a) > (b)) ? (a) : (b))
 
 
 // Applique les paramètres d'ordonnancement au processus courant
+/* DEBUT Tony V1 */
 int appliquerOrdonnancement(const struct SchedParams* p, const char* nomProg)
 {
-    if (!p) return -1;
+    const char* prog = nomProg ? nomProg : "prog";
 
-    // NORT -> rien à faire
-    if (p->modeOrdonnanceur == ORDONNANCEMENT_NORT) {
-        // Optionnel: print pour debug
-        // printf("[%s] Scheduler: NORT\n", nomProg ? nomProg : "prog");
-        return 0;
-    }
-
-    // RR
-    if (p->modeOrdonnanceur == ORDONNANCEMENT_RR) {
-        struct sched_param sp;
-        memset(&sp, 0, sizeof(sp));
-        sp.sched_priority = 99;
-
-        if (sched_setscheduler(0, SCHED_RR, &sp) != 0) {
-            fprintf(stderr, "[%s] ERREUR sched_setscheduler(RR): %s\n",
-                    nomProg ? nomProg : "prog", strerror(errno));
-            return -1;
-        }
-
-        printf("Mode d'operation du scheduler modifie avec succes pour %s (RR).\n",
-               nomProg ? nomProg : "prog");
-        return 0;
-    }
-
-    // FIFO
-    if (p->modeOrdonnanceur == ORDONNANCEMENT_FIFO) {
-        struct sched_param sp;
-        memset(&sp, 0, sizeof(sp));
-        sp.sched_priority = 99;
-
-        if (sched_setscheduler(0, SCHED_FIFO, &sp) != 0) {
-            fprintf(stderr, "[%s] ERREUR sched_setscheduler(FIFO): %s\n",
-                    nomProg ? nomProg : "prog", strerror(errno));
-            return -1;
-        }
-
-        printf("Mode d'operation du scheduler modifie avec succes pour %s (FIFO).\n",
-               nomProg ? nomProg : "prog");
-        return 0;
-    }
-
-    // DEADLINE -> laisse ton impl sched_setattr/syscall ici si tu l'as déjà
-    // (mais pour régler ton problème de fluidité du scénario 01, pas besoin tout de suite)
-    if (p->modeOrdonnanceur == ORDONNANCEMENT_DEADLINE) {
-        fprintf(stderr, "[%s] DEADLINE pas géré ici (à implémenter via sched_setattr)\n",
-                nomProg ? nomProg : "prog");
+    if (!p) {
+        fprintf(stderr, "[%s] ERREUR ordonnancement: paramètres nuls\n", prog);
         return -1;
     }
 
+    if (p->modeOrdonnanceur == ORDONNANCEMENT_NORT) {
+        return 0;
+    }
+
+    if (p->modeOrdonnanceur == ORDONNANCEMENT_RR ||
+        p->modeOrdonnanceur == ORDONNANCEMENT_FIFO) {
+        struct sched_param sp;
+        memset(&sp, 0, sizeof(sp));
+        sp.sched_priority = 99;
+
+        int policy = (p->modeOrdonnanceur == ORDONNANCEMENT_RR) ? SCHED_RR : SCHED_FIFO;
+        const char* policyName = (policy == SCHED_RR) ? "RR" : "FIFO";
+
+        if (sched_setscheduler(0, policy, &sp) != 0) {
+            fprintf(stderr, "[%s] ERREUR sched_setscheduler(%s, priorité 99): %s\n",
+                    prog, policyName, strerror(errno));
+            return -1;
+        }
+
+        printf("Mode d'operation du scheduler modifie avec succes pour %s (%s, priorité 99).\n",
+               prog, policyName);
+        return 0;
+    }
+
+    if (p->modeOrdonnanceur == ORDONNANCEMENT_DEADLINE) {
+        if (p->runtime == 0 || p->deadline == 0 || p->period == 0) {
+            fprintf(stderr,
+                    "[%s] ERREUR DEADLINE: utiliser -d runtime,deadline,period en ms, valeurs > 0\n",
+                    prog);
+            return -1;
+        }
+
+        if (!(p->runtime <= p->deadline && p->deadline <= p->period)) {
+            fprintf(stderr,
+                    "[%s] ERREUR DEADLINE: contraintes invalides (%u <= %u <= %u requis)\n",
+                    prog, p->runtime, p->deadline, p->period);
+            return -1;
+        }
+
+        uint64_t runtime_ns = 0;
+        uint64_t deadline_ns = 0;
+        uint64_t period_ns = 0;
+
+        if (ms_to_ns_checked(p->runtime, &runtime_ns) != 0 ||
+            ms_to_ns_checked(p->deadline, &deadline_ns) != 0 ||
+            ms_to_ns_checked(p->period, &period_ns) != 0) {
+            fprintf(stderr, "[%s] ERREUR DEADLINE: conversion ms -> ns impossible: %s\n",
+                    prog, strerror(errno));
+            return -1;
+        }
+
+        struct sched_attr attr;
+        memset(&attr, 0, sizeof(attr));
+        attr.size = sizeof(attr);
+        attr.sched_policy = SCHED_DEADLINE;
+        attr.sched_priority = 0;
+        attr.sched_runtime = runtime_ns;
+        attr.sched_deadline = deadline_ns;
+        attr.sched_period = period_ns;
+
+        if (sched_setattr_wrapper(0, &attr, 0) != 0) {
+            fprintf(stderr,
+                    "[%s] ERREUR sched_setattr(DEADLINE runtime=%u ms, deadline=%u ms, period=%u ms): %s\n",
+                    prog, p->runtime, p->deadline, p->period, strerror(errno));
+            return -1;
+        }
+
+        printf("Mode d'operation du scheduler modifie avec succes pour %s "
+               "(DEADLINE runtime=%u ms, deadline=%u ms, period=%u ms).\n",
+               prog, p->runtime, p->deadline, p->period);
+        return 0;
+    }
+
+    fprintf(stderr, "[%s] ERREUR ordonnancement: mode inconnu (%d)\n",
+            prog, p->modeOrdonnanceur);
     return -1;
 }
+/* FIN Tony V1 */
 
 // Parse l'option -s (type d'ordonnanceur: NORT, RR, FIFO, DEADLINE)
 int parseSchedOption(const char* arg, struct SchedParams* params) {
@@ -91,24 +158,47 @@ int parseSchedOption(const char* arg, struct SchedParams* params) {
 }
 
 // Parse l'argument suivant l'option -d (runtime,deadline,period en millisecondes)
+/* DEBUT Tony V1 */
 int parseDeadlineParams(char* arg, struct SchedParams* params) {
-    int paramIndex = 0;
-    char* splitString = strtok(arg, ",");
-    while (splitString != NULL) {
-        unsigned int value = (unsigned int)atoi(splitString);
-        if (paramIndex == 0) {
-            params->runtime = value;
-        } else if (paramIndex == 1) {
-            params->deadline = value;
-        } else {
-            params->period = value;
-            break;
-        }
-        paramIndex++;
-        splitString = strtok(NULL, ",");
+    if (!arg || !params) {
+        return -1;
     }
+
+    unsigned int valeurs[3] = {0, 0, 0};
+    int count = 0;
+    char* saveptr = NULL;
+    char* token = strtok_r(arg, ",", &saveptr);
+
+    while (token != NULL) {
+        if (count >= 3) {
+            fprintf(stderr, "Option -d invalide: trop de paramètres, attendu runtime,deadline,period\n");
+            return -1;
+        }
+
+        errno = 0;
+        char* endptr = NULL;
+        unsigned long value = strtoul(token, &endptr, 10);
+
+        if (errno != 0 || endptr == token || *endptr != '\0' || value > UINT_MAX) {
+            fprintf(stderr, "Option -d invalide: valeur '%s' non numérique\n", token);
+            return -1;
+        }
+
+        valeurs[count++] = (unsigned int)value;
+        token = strtok_r(NULL, ",", &saveptr);
+    }
+
+    if (count != 3) {
+        fprintf(stderr, "Option -d invalide: attendu runtime,deadline,period en millisecondes\n");
+        return -1;
+    }
+
+    params->runtime = valeurs[0];
+    params->deadline = valeurs[1];
+    params->period = valeurs[2];
     return 0;
 }
+/* FIN Tony V1 */
 
 
 /* Convolution with repeat mode */

@@ -180,7 +180,9 @@ int main(int argc, char* argv[]){
     // la mémoire partagée).
     unsigned char* tempIn = tempsreel_malloc(tailleIn);
     unsigned char* tempOut = tempsreel_malloc(tailleOut);
-    if (tempOut == NULL)
+    /* DEBUT Tony V1 */
+    if ((tempOut == NULL) || (tempIn == NULL))
+    /* FIN Tony V1 */
     {
         printf("Erreur d'allocation memoire pour les buffers temporaires\n");
         return -1;
@@ -247,25 +249,26 @@ int main(int argc, char* argv[]){
             signalEcrivain(&outZone);
         }
 
+        /* DEBUT Tony V1 */
         else if (r == 1)
         {
-            // Evenement de profilage : attente mutex lecture
-            evenementProfilage(&profInfos, ETAT_TRAITEMENT); // Evenement de profilage : traitement
+            evenementProfilage(&profInfos, ETAT_ATTENTE_MUTEXLECTURE);
+            attenteLecteur(&inZone);
+            evenementProfilage(&profInfos, ETAT_TRAITEMENT);
             memcpy(tempIn, inZone.data, tailleIn);
-            signalLecteur(&inZone); // libère vite l'entrée
-            // Traitement direct dans tempOut pour éviter de bloquer le mutex pendant toute la durée du traitement
+            signalLecteur(&inZone);
+
             evenementProfilage(&profInfos, ETAT_TRAITEMENT);
             resizeBilinear(tempIn, hauteurVideoIn, largeurVideoIn, tempOut,
-                                    hauteurVideoOut, largeurVideoOut, rg, canauxVideoIn);
-            
-            
-            // Evenement de profilage : attente mutex ecriture
+                        hauteurVideoOut, largeurVideoOut, rg, canauxVideoIn);
+
             evenementProfilage(&profInfos, ETAT_ATTENTE_MUTEXECRITURE);
             attenteEcrivain(&outZone);
             evenementProfilage(&profInfos, ETAT_TRAITEMENT);
             memcpy(outZone.data, tempOut, tailleOut);
             signalEcrivain(&outZone);
         }
+        /* FIN Tony V1 */
 
     }
 

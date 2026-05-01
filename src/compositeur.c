@@ -184,6 +184,86 @@ static inline int lecture_pret(int r) {
     return (r == 1);
 }
 
+/* DEBUT Tony V1 */
+static void ecrireCompositeCompletBGR(const int total,
+                                      int fbfd,
+                                      unsigned char* fb,
+                                      size_t largeurFB,
+                                      size_t hauteurFB,
+                                      struct fb_var_screeninfo *vinfoPtr,
+                                      int fbLineLength,
+                                      unsigned char* frames[4],
+                                      const size_t h[4],
+                                      const size_t w[4],
+                                      const int gotFrame[4])
+{
+    static int currentPage = 0;
+
+    (void)largeurFB;
+
+    if (!fb || !vinfoPtr || !frames || !h || !w || !gotFrame || total <= 0) {
+        return;
+    }
+
+    currentPage = (currentPage + 1) % 2;
+    unsigned char *currentFramebuffer =
+        fb + (size_t)currentPage * (size_t)fbLineLength * hauteurFB;
+
+    int allReady = 1;
+    for (int i = 0; i < total; i++) {
+        if (!gotFrame[i] || frames[i] == NULL) {
+            allReady = 0;
+            break;
+        }
+    }
+
+    if (!allReady) {
+        memset(currentFramebuffer, 0, (size_t)fbLineLength * hauteurFB);
+    }
+
+    for (int position = 0; position < total; position++) {
+        if (!gotFrame[position] || frames[position] == NULL) {
+            continue;
+        }
+
+        size_t offsetLigne = 0;
+        size_t offsetColonne = 0;
+
+        if (total == 2) {
+            offsetLigne = (position == 1) ? h[position] : 0;
+        } else if (total == 3 || total == 4) {
+            offsetLigne = (position >= 2) ? h[position] : 0;
+            offsetColonne = (position % 2) ? w[position] * 3u : 0;
+        }
+
+        size_t rowBytes = w[position] * 3u;
+        if (offsetColonne >= (size_t)fbLineLength) {
+            continue;
+        }
+        if (offsetColonne + rowBytes > (size_t)fbLineLength) {
+            rowBytes = (size_t)fbLineLength - offsetColonne;
+        }
+
+        for (size_t ligne = 0; ligne < h[position]; ligne++) {
+            size_t dstLine = offsetLigne + ligne;
+            if (dstLine >= hauteurFB) {
+                break;
+            }
+
+            memcpy(currentFramebuffer + dstLine * (size_t)fbLineLength + offsetColonne,
+                   frames[position] + ligne * w[position] * 3u,
+                   rowBytes);
+        }
+    }
+
+    vinfoPtr->yoffset = currentPage * vinfoPtr->yres;
+    vinfoPtr->activate = FB_ACTIVATE_VBL;
+    if (ioctl(fbfd, FBIOPAN_DISPLAY, vinfoPtr)) {
+        printf("Erreur lors du changement de buffer (double buffering inactif)!\n");
+    }
+}
+/* FIN Tony V1 */
+
 int main(int argc, char* argv[])
 {
     // FAIT PAR ANTHONY VEILLET
@@ -688,40 +768,53 @@ int main(int argc, char* argv[])
             newFrame[i] = 1;
         }
 
+        /* DEBUT Tony V1 */
         // ------------------------
-        // 2) AFFICHAGE avec cap FPS (par entrée)
+        // 2) AFFICHAGE avec cap FPS (un seul pan framebuffer par cycle)
         // ------------------------
-        for (int i = 0; i < nbrActifs; i++) {
+        now = get_time();
 
+        int displayDue[4] = {0, 0, 0, 0};
+        int anyDisplay = 0;
+
+        for (int i = 0; i < nbrActifs; i++) {
             if (!gotFrame[i]) continue;
             if (now < nextDisplay[i]) continue;
 
-            // Affiche la dernière trame connue à la position i
-            ecrireImage(
-                i, nbrActifs,
+            displayDue[i] = 1;
+            anyDisplay = 1;
+        }
+
+        if (anyDisplay) {
+            ecrireCompositeCompletBGR(
+                nbrActifs,
                 fbfd, fbp,
                 vinfo.xres, vinfo.yres,
                 &vinfo, finfo.line_length,
-                lastFrameBGR[i],
-                h[i], w[i],
-                3 // toujours BGR
+                lastFrameBGR,
+                h, w,
+                gotFrame
             );
 
-            // Stats, on compte seulement si une *nouvelle* frame est arrivée depuis le dernier affichage
-            if (newFrame[i]) {
-                framesWin[i]++;
+            for (int i = 0; i < nbrActifs; i++) {
+                if (!displayDue[i]) continue;
 
-                if (lastDisplayed[i] > 0.0) {
-                    double dt = now - lastDisplayed[i];
-                    if (dt > maxDt[i]) maxDt[i] = dt;
+                if (newFrame[i]) {
+                    framesWin[i]++;
+
+                    if (lastDisplayed[i] > 0.0) {
+                        double dt = now - lastDisplayed[i];
+                        if (dt > maxDt[i]) maxDt[i] = dt;
+                    }
+
+                    lastDisplayed[i] = now;
+                    newFrame[i] = 0;
                 }
-                lastDisplayed[i] = now;
-                newFrame[i] = 0;
-            }
 
-            // Prochain affichage (anti-drift)
-            do { nextDisplay[i] += framePeriod[i]; } while (nextDisplay[i] <= now);
+                do { nextDisplay[i] += framePeriod[i]; } while (nextDisplay[i] <= now);
+            }
         }
+        /* FIN Tony V1 */
 
         // ------------------------
         // 3) stats.txt toutes 5 sec

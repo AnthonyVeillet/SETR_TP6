@@ -41,7 +41,9 @@ int main(int argc, char* argv[])
 
     const char* fichier_ulv = NULL;
     const char* mem_sortie = NULL;
-    struct SchedParams schedParams = {0};
+    /* DEBUT Tony V1 */
+    struct SchedParams schedParams = {};
+    /* FIN Tony V1 */
 
     if (argc >= 2 && strcmp(argv[1], "--debug") == 0) {
         printf("[decodeur] Mode debug\n");
@@ -70,7 +72,12 @@ int main(int argc, char* argv[])
     printf("[decodeur] init: entree=%s sortie=%s sched=%d\n",
            fichier_ulv, mem_sortie, schedParams.modeOrdonnanceur);
 
-    appliquerOrdonnancement(&schedParams, "decodeur");
+    /* DEBUT Tony V1 */
+    if (appliquerOrdonnancement(&schedParams, "decodeur") != 0) {
+        fprintf(stderr, "[decodeur] Erreur appliquerOrdonnancement\n");
+        return -1;
+    }
+    /* FIN Tony V1 */
 
     // --- Ouvrir + mmap (MAP_POPULATE recommandé, avec fallback si ENOMEM) ---
     int fd = open(fichier_ulv, O_RDONLY);
@@ -153,7 +160,9 @@ int main(int argc, char* argv[])
     }
 
     // Init mémoire partagée (writer)
-    struct memPartage zone = {0};
+    /* DEBUT Tony V1 */
+    struct memPartage zone = {};
+    /* FIN Tony V1 */
     if (initMemoirePartageeEcrivain(mem_sortie, &zone, &infos) != 0) {
         fprintf(stderr, "[decodeur] Erreur initMemoirePartageeEcrivain\n");
         munmap(fichier_map, (size_t)taille_fichier);
