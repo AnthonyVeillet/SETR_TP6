@@ -1,0 +1,6 @@
+Sommaire des statistiques - Série: R00
+Généré le: Sat  2 May 03:52:49 BST 2026
+
+Test     Fichier                        Nb mesures   FPS moyen      Max ms moyen     Pire max ms   
+----     -------                        ----------   ---------      ------------     -----------   
+1        R00_stats.txt                  64           29.891         40.445           75.000        

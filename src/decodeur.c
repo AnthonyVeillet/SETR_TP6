@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <getopt.h>
 #include <limits.h>
+#include <time.h>
 
 #include "allocateurMemoire.h"
 #include "commMemoirePartagee.h"
@@ -26,6 +27,29 @@ static int read_u32(const unsigned char* p, uint32_t* out)
     return 0;
 }
 
+/* DEBUT Tony V2 */
+#define FPS_CIBLE_ENERGIE 24.0
+
+static double temps_monotone_sec(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+}
+
+static void dormir_jusqua(double t_cible)
+{
+    double maintenant = temps_monotone_sec();
+
+    if (t_cible <= maintenant) {
+        return;
+    }
+
+    double delai = t_cible - maintenant;
+    usleep((useconds_t)(delai * 1000000.0));
+}
+/* FIN Tony V2 */
+
 int main(int argc, char* argv[])
 {
     setbuf(stdout, NULL);
@@ -37,7 +61,7 @@ int main(int argc, char* argv[])
              "profilage-%s-%u.txt", nomProgramme, (unsigned int)getpid());
     InfosProfilage profInfos;
     initProfilage(&profInfos, signatureProfilage);
-    evenementProfilage(&profInfos, ETAT_INITIALISATION);
+    //evenementProfilage(&profInfos, ETAT_INITIALISATION);
 
     const char* fichier_ulv = NULL;
     const char* mem_sortie = NULL;
@@ -169,15 +193,35 @@ int main(int argc, char* argv[])
         return -1;
     }
 
+    /* DEBUT Tony V2 */
     const size_t base_offset = 20;
     size_t offset = base_offset;
     int frame_count = 0;
+
+    /*
+    * Mode énergie:
+    * Le TP exige seulement 24 fps minimum pour cette version.
+    * Si la source est plus rapide, on saute des JPEG avant décodage.
+    * Cela économise beaucoup plus que de décoder 30 fps puis en afficher seulement 24.
+    */
+    const double fps_source = (infos.fps > 0) ? (double)infos.fps : FPS_CIBLE_ENERGIE;
+    const double periode_sortie = 1.0 / FPS_CIBLE_ENERGIE;
+    double prochain_affichage = temps_monotone_sec();
+    double credit_drop = 0.0;
+
+    printf("[decodeur] Mode energie actif: sortie cible %.1f fps, source %.1f fps\n",
+        FPS_CIBLE_ENERGIE, fps_source);
+    /* FIN Tony V2 */
 
     // Sanity cap : un JPEG 240p ne devrait JAMAIS être énorme.
     // On met large pour rester safe sur d'autres tailles.
     const uint32_t MAX_JPEG_SIZE = (uint32_t)((taille_image < (size_t)UINT32_MAX / 4) ? (taille_image * 4) : UINT32_MAX);
 
     while (1) {
+        /* DEBUT Tony V2 */
+        double maintenant = 0.0;
+        /* FIN Tony V2 */
+
         if (offset + 4 > (size_t)taille_fichier) offset = base_offset;
 
         uint32_t taille_jpeg = 0;
@@ -201,8 +245,35 @@ int main(int argc, char* argv[])
             continue;
         }
 
+        /* DEBUT Tony V2 */
+        /*
+        * Réduction énergétique:
+        * Si la source dépasse 24 fps, on saute certaines frames AVANT le décodage JPEG.
+        *
+        * Exemple source 30 fps:
+        * fps_source - 24 = 6, donc le crédit atteint 30 environ toutes les 5 frames.
+        * Résultat: on saute environ 1 frame sur 5 -> environ 24 fps décodées.
+        */
+        int garder_frame = 1;
+
+        if (fps_source > FPS_CIBLE_ENERGIE) {
+            credit_drop += (fps_source - FPS_CIBLE_ENERGIE);
+
+            if (credit_drop >= fps_source) {
+                credit_drop -= fps_source;
+                garder_frame = 0;
+            }
+        }
+
+        if (!garder_frame) {
+            offset += 4 + (size_t)taille_jpeg;
+            frame_count++;
+            continue;
+        }
+        /* FIN Tony V2 */
+
         // Attendre la zone de sortie dispo (mutex LOCKÉ à la sortie)
-        evenementProfilage(&profInfos, ETAT_ATTENTE_MUTEXECRITURE);
+        //evenementProfilage(&profInfos, ETAT_ATTENTE_MUTEXECRITURE);
         if (attenteEcrivain(&zone) < 0) {
             fprintf(stderr, "[decodeur] attenteEcrivain failed\n");
             break;
@@ -211,7 +282,7 @@ int main(int argc, char* argv[])
         // On libère le mutex pendant le décodage
         pthread_mutex_unlock(&zone.header->mutex);
 
-        evenementProfilage(&profInfos, ETAT_TRAITEMENT);
+        //evenementProfilage(&profInfos, ETAT_TRAITEMENT);
 
         // --- Décodage JPEG en scanlines (PAS de grosse alloc par frame) ---
         jpgd::jpeg_decoder_mem_stream stream(ptr + offset + 4, (jpgd::uint)taille_jpeg);
@@ -222,7 +293,7 @@ int main(int argc, char* argv[])
                     (int)decoder.get_error_code(), frame_count);
             offset += 4 + (size_t)taille_jpeg;
             frame_count++;
-            evenementProfilage(&profInfos, ETAT_ENPAUSE);
+            //evenementProfilage(&profInfos, ETAT_ENPAUSE);
             usleep(1000);
             continue;
         }
@@ -233,7 +304,7 @@ int main(int argc, char* argv[])
                     st, frame_count);
             offset += 4 + (size_t)taille_jpeg;
             frame_count++;
-            evenementProfilage(&profInfos, ETAT_ENPAUSE);
+            //evenementProfilage(&profInfos, ETAT_ENPAUSE);
             usleep(1000);
             continue;
         }
@@ -253,7 +324,7 @@ int main(int argc, char* argv[])
             fprintf(stderr, "[decodeur] bpp inattendu (%d) pour canaux=3 frame=%d -> skip\n", bpp, frame_count);
             offset += 4 + (size_t)taille_jpeg;
             frame_count++;
-            evenementProfilage(&profInfos, ETAT_ENPAUSE);
+            //evenementProfilage(&profInfos, ETAT_ENPAUSE);
             usleep(1000);
             continue;
         }
@@ -261,7 +332,7 @@ int main(int argc, char* argv[])
             fprintf(stderr, "[decodeur] bpp inattendu (%d) pour canaux=1 frame=%d -> skip\n", bpp, frame_count);
             offset += 4 + (size_t)taille_jpeg;
             frame_count++;
-            evenementProfilage(&profInfos, ETAT_ENPAUSE);
+            //evenementProfilage(&profInfos, ETAT_ENPAUSE);
             usleep(1000);
             continue;
         }
@@ -304,19 +375,35 @@ int main(int argc, char* argv[])
         memcpy(zone.data, decoded_buf, taille_image);
         signalEcrivain(&zone); // unlock + signal lecteur
 
+        /* DEBUT Tony V2 */
         offset += 4 + (size_t)taille_jpeg;
         frame_count++;
 
-        evenementProfilage(&profInfos, ETAT_ENPAUSE);
-        //sched_yield();
+        //evenementProfilage(&profInfos, ETAT_ENPAUSE);
+
+        /*
+        * On cadence la production à 24 fps.
+        * Le compositeur va dormir sur attenteLecteur(), donc ce sleep donne
+        * réellement du temps idle au CPU au lieu de faire du polling.
+        */
+        prochain_affichage += periode_sortie;
+
+        maintenant = temps_monotone_sec();
+        if (prochain_affichage > maintenant) {
+            dormir_jusqua(prochain_affichage);
+        } else {
+            prochain_affichage = maintenant;
+        }
+
         continue;
+        /* FIN Tony V2 */
 
 skip_frame:
         // On n’a rien écrit -> on NE signale PAS le lecteur.
         // Important: on attend juste un peu et on continue.
         offset += 4 + (size_t)taille_jpeg;
         frame_count++;
-        evenementProfilage(&profInfos, ETAT_ENPAUSE);
+        //evenementProfilage(&profInfos, ETAT_ENPAUSE);
         usleep(1000);
         continue;
     }

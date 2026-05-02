@@ -295,7 +295,7 @@ int main(int argc, char* argv[])
     initProfilage(&profInfos, signatureProfilage);
     
     // Premier evenement de profilage : l'initialisation du programme
-    evenementProfilage(&profInfos, ETAT_INITIALISATION);
+    //evenementProfilage(&profInfos, ETAT_INITIALISATION);
 
     // Code lisant les options sur la ligne de commande
     struct SchedParams schedParams = {0};           // Paramètres de l'ordonnanceur
@@ -729,8 +729,81 @@ int main(int argc, char* argv[])
         framesWin[i] = 0;
     }
 
+    /* DEBUT Tony V2 */
+    /*
+    * Mode énergie minimal:
+    * Pour cette version du TP, on affiche seulement une vidéo 240p.
+    * On évite donc le polling multi-source et le cap FPS côté compositeur.
+    * Le decodeur produit déjà à 24 fps, donc le compositeur attend simplement
+    * une nouvelle frame, l'affiche, puis retourne dormir.
+    */
+    if (nbrActifs == 1) {
+        while (1) {
+            //evenementProfilage(&profInfos, ETAT_ATTENTE_MUTEXLECTURE);
+            attenteLecteur(&zone1);
+
+            //evenementProfilage(&profInfos, ETAT_TRAITEMENT);
+
+            if (ch[0] == 3) {
+                memcpy(lastFrameBGR[0], zone1.data, pixels[0] * 3u);
+            } else if (ch[0] == 1) {
+                const unsigned char* src = zone1.data;
+                unsigned char* dst = lastFrameBGR[0];
+
+                for (size_t p = 0; p < pixels[0]; p++) {
+                    unsigned char g = src[p];
+                    *dst++ = g;
+                    *dst++ = g;
+                    *dst++ = g;
+                }
+            }
+
+            signalLecteur(&zone1);
+
+            double now = get_time();
+
+            ecrireImage(
+                0, 1,
+                fbfd, fbp,
+                vinfo.xres, vinfo.yres,
+                &vinfo, finfo.line_length,
+                lastFrameBGR[0],
+                h[0], w[0],
+                3
+            );
+
+            framesWin[0]++;
+
+            if (lastDisplayed[0] > 0.0) {
+                double dt = now - lastDisplayed[0];
+                if (dt > maxDt[0]) {
+                    maxDt[0] = dt;
+                }
+            }
+
+            lastDisplayed[0] = now;
+
+            if (now >= nextStatsWrite) {
+                double elapsed = now - debutCompositeur;
+                double winDur = now - winStart[0];
+                double moy = (winDur > 0.0) ? ((double)framesWin[0] / winDur) : 0.0;
+
+                fprintf(fstats, "[%.1f] Entree 1: moy=%.1f fps, max=%.1f ms\n",
+                        elapsed, moy, maxDt[0] * 1000.0);
+
+                winStart[0] = now;
+                framesWin[0] = 0;
+                maxDt[0] = 0.0;
+                nextStatsWrite += 5.0;
+            }
+
+            //evenementProfilage(&profInfos, ETAT_ENPAUSE);
+        }
+    }
+    /* FIN Tony V2 */
+
     while(1) {
-        evenementProfilage(&profInfos, ETAT_TRAITEMENT);
+        //evenementProfilage(&profInfos, ETAT_TRAITEMENT);
         double now = get_time();
 
         // ------------------------
@@ -738,9 +811,9 @@ int main(int argc, char* argv[])
         // ------------------------
         for (int i = 0; i < nbrActifs; i++) {
 
-            evenementProfilage(&profInfos, ETAT_ATTENTE_MUTEXLECTURE);
+            //evenementProfilage(&profInfos, ETAT_ATTENTE_MUTEXLECTURE);
             int r = attenteLecteurAsync(zones[i]);
-            evenementProfilage(&profInfos, ETAT_TRAITEMENT);
+            //evenementProfilage(&profInfos, ETAT_TRAITEMENT);
             if (!lecture_pret(r)) {
                 continue; // pas prêt -> next source
             }
@@ -857,14 +930,14 @@ int main(int argc, char* argv[])
         if (nextEvent > now) {
             double sleepSec = nextEvent - now;
             if (sleepSec > 0.0005) { // >0.5 ms
-                evenementProfilage(&profInfos, ETAT_ENPAUSE);
+                //evenementProfilage(&profInfos, ETAT_ENPAUSE);
                 usleep((unsigned int)(sleepSec * 1e6));
             } else {
-                evenementProfilage(&profInfos, ETAT_ENPAUSE);
+                //evenementProfilage(&profInfos, ETAT_ENPAUSE);
                 usleep(200); // micro-yield
             }
         } else {
-            evenementProfilage(&profInfos, ETAT_ENPAUSE);
+            //evenementProfilage(&profInfos, ETAT_ENPAUSE);
             usleep(500); // fallback yield
         }
     }

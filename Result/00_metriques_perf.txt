@@ -1,0 +1,14 @@
+# started on Sat May  2 03:45:46 2026
+
+
+ Performance counter stats for process id '769,774,775,776,778,780':
+
+        227,972.12 msec task-clock                       #    0.760 CPUs utilized             
+            79,676      context-switches                 #  349.499 /sec                      
+                 0      cpu-migrations                   #    0.000 /sec                      
+                 0      page-faults                      #    0.000 /sec                      
+   225,795,443,246      cycles                           #    0.990 GHz                       
+   122,334,044,442      instructions                     #    0.54  insn per cycle            
+
+     300.031662789 seconds time elapsed
+
