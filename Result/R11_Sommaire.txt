@@ -1,0 +1,6 @@
+Sommaire des statistiques - Série: R11
+Généré le: Sat  2 May 04:15:43 BST 2026
+
+Test     Fichier                        Nb mesures   FPS moyen      Max ms moyen     Pire max ms   
+----     -------                        ----------   ---------      ------------     -----------   
+1        R11_stats.txt                  65           27.726         39.897           47.100        

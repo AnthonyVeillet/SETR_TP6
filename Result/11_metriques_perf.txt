@@ -1,0 +1,14 @@
+# started on Sat May  2 04:09:20 2026
+
+
+ Performance counter stats for process id '1108,1113,1114,1115,1117,1118':
+
+        119,687.96 msec task-clock                       #    0.399 CPUs utilized             
+            71,037      context-switches                 #  593.518 /sec                      
+                 0      cpu-migrations                   #    0.000 /sec                      
+                 0      page-faults                      #    0.000 /sec                      
+   117,913,778,954      cycles                           #    0.985 GHz                       
+    62,369,149,513      instructions                     #    0.53  insn per cycle            
+
+     300.011794275 seconds time elapsed
+

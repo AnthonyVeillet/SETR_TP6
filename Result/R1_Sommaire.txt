@@ -1,0 +1,6 @@
+Sommaire des statistiques - Série: R1
+Généré le: Sat  2 May 04:15:36 BST 2026
+
+Test     Fichier                        Nb mesures   FPS moyen      Max ms moyen     Pire max ms   
+----     -------                        ----------   ---------      ------------     -----------   
+1        R1_stats.txt                   64           28.062         40.505           53.200        
