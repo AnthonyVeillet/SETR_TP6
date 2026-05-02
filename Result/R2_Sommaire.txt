@@ -1,0 +1,6 @@
+Sommaire des statistiques - Série: R2
+Généré le: Sat  2 May 04:32:24 BST 2026
+
+Test     Fichier                        Nb mesures   FPS moyen      Max ms moyen     Pire max ms   
+----     -------                        ----------   ---------      ------------     -----------   
+1        R2_stats.txt                   64           28.077         40.816           55.400        

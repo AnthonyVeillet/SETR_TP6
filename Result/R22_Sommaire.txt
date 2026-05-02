@@ -1,0 +1,6 @@
+Sommaire des statistiques - Série: R22
+Généré le: Sat  2 May 04:32:28 BST 2026
+
+Test     Fichier                        Nb mesures   FPS moyen      Max ms moyen     Pire max ms   
+----     -------                        ----------   ---------      ------------     -----------   
+1        R22_stats.txt                  63           27.711         40.789           62.800        

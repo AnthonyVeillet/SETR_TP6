@@ -1,0 +1,14 @@
+# started on Sat May  2 04:26:50 2026
+
+
+ Performance counter stats for process id '2100,2105,2106,2107,2109,2110':
+
+        119,830.42 msec task-clock                       #    0.399 CPUs utilized             
+            70,945      context-switches                 #  592.045 /sec                      
+                 0      cpu-migrations                   #    0.000 /sec                      
+                 0      page-faults                      #    0.000 /sec                      
+   118,049,719,501      cycles                           #    0.985 GHz                       
+    62,370,287,854      instructions                     #    0.53  insn per cycle            
+
+     300.010252027 seconds time elapsed
+
